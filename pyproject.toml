@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tmsab"
+version = "0.1.0"
+description = "Aberrometria corneana anterior calculada a partir de exportações numéricas do topógrafo Tomey TMS (ferramenta de pesquisa)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Uso interno — Dr. Rodrigo Magno da Silva Oliveira" }
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.6"]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.scripts]
+tmsab = "tmsab.cli:main"
+tmsab-gui = "tmsab.gui.app:main"
+
+[tool.setuptools.packages.find]
+include = ["tmsab*"]
+
+[tool.setuptools.package-data]
+tmsab = ["adapters/profiles/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,42 @@
+{
+  "profile_id": "tms4_datatables_v0",
+  "adapter_version": "0.1.0",
+  "status": "presumido_nao_verificado",
+  "description": "Perfil PRESUMIDO para a exportação 'Data Tables' (ASCII) do TMS-4 / TMS-4N, seção 3.11.5 do manual. Deve ser confrontado com arquivos reais (G0/G1) antes de qualquer declaração de compatibilidade. Ajustar os campos abaixo conforme a instalação.",
+  "device_models": ["TMS-4", "TMS-4N"],
+  "n_angles": 256,
+  "n_rings_allowed": [25, 31],
+  "angle_start_deg": 0.0,
+  "angle_direction": 1,
+  "mirror_x": false,
+  "angle_note": "Primeira posição angular às 3 horas (0°), sentido anti-horário na vista do observador — A CONFIRMAR na instalação (manual e padrão assimétrico).",
+  "delimiters": [",", ";", "\t", " "],
+  "decimal": "auto",
+  "orientation": "auto",
+  "rad_meaning": "radial_plano",
+  "height": {
+    "reference": "plano_apical",
+    "sign": 1,
+    "note": "HIT presumido como profundidade sagital referida ao plano apical, positivo posterior. Se a versão exportar elevação relativa a esfera de referência, informar o raio em 'reference_sphere_mm' e mudar 'reference' para 'esfera_referencia'."
+  },
+  "roles": {
+    "HIT": {"patterns": ["(?i)_HIT", "(?i)height", "(?i)altura"], "unit": "mm", "required": true,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true},
+    "RAD": {"patterns": ["(?i)_RAD", "(?i)radial"], "unit": "mm", "required": true,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true},
+    "ROC": {"patterns": ["(?i)_ROC", "(?i)curvature", "(?i)curvatura"], "unit": "mm", "required": false,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true},
+    "DIO": {"patterns": ["(?i)_DIO", "(?i)power", "(?i)dioptr"], "unit": "D", "required": false,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true},
+    "RNG": {"patterns": ["(?i)_RNG", "(?i)ring_px"], "unit": "px", "required": false,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": false},
+    "PUP": {"patterns": ["(?i)_PUP", "(?i)pupil", "(?i)pupila"], "unit": "mm", "required": false, "format": "keyvalue",
+            "frame": "video_apex_x_direita_y_cima", "x_sign": 1, "y_sign": 1}
+  },
+  "eye_patterns": {
+    "OD": ["(?i)_OD(?=[_.])", "(?i)_R(?=[_.])", "(?i)right"],
+    "OS": ["(?i)_OS(?=[_.])", "(?i)_OE(?=[_.])", "(?i)_L(?=[_.])", "(?i)left"]
+  },
+  "exam_id_regex": "^(?P<exam>[A-Za-z0-9-]+)_(?:OD|OS|OE|R|L)_",
+  "manifest_filename": "manifest.json"
+}

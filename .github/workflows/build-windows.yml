@@ -1,0 +1,67 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[gui,dev]"
+      - run: python -m pytest -q
+      - run: python -m tmsab.cli verify
+      - run: QT_QPA_PLATFORM=offscreen python -m tmsab.gui.app --smoke
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[gui,dev]"
+      - run: python -m tmsab.cli verify
+      - name: Smoke test da interface (offscreen)
+        run: python -m tmsab.gui.app --smoke
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: PyInstaller
+        run: pyinstaller packaging/AberrometriaTMS.spec --noconfirm --clean
+      - name: Testa o executavel
+        run: |
+          dist\AberrometriaTMS\tmsab.exe verify
+          dist\AberrometriaTMS\tmsab.exe synth --out synth_ci
+          dist\AberrometriaTMS\tmsab.exe analyze synth_ci\SYN-CON_OD --out out_ci --no-pdf
+        shell: cmd
+      - name: Instalador (Inno Setup, se disponivel)
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) { & $iscc packaging\installer.iss } else { Write-Host "Inno Setup ausente; apenas zip" }
+        shell: pwsh
+      - name: Zip
+        run: Compress-Archive -Path dist\AberrometriaTMS -DestinationPath AberrometriaTMS-windows.zip
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AberrometriaTMS-windows
+          path: |
+            AberrometriaTMS-windows.zip
+            dist/*-setup.exe
+          if-no-files-found: error
+      - name: Release (tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            AberrometriaTMS-windows.zip
+            dist/*-setup.exe

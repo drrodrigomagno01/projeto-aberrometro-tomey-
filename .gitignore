@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
+*.spec.bak
+synth_ci/
+out_ci/
+.pytest_cache/
+examples/*/
+!examples/README.md

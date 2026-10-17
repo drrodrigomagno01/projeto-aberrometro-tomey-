@@ -1,0 +1,25 @@
+# Registro de decisões de engenharia (ADR) — v0.1.0, 17/10/2026
+
+| # | Decisão | Alternativas | Motivo |
+|---|---|---|---|
+| D1 | **Programa de computador** (Python + PySide6/Qt), executável Windows via PyInstaller; CLI com o mesmo núcleo | site/web app; Electron/Tauri | decisão do responsável clínico; dados ficam no computador de análise; mesmo núcleo numérico na interface e na validação (plano §6) |
+| D2 | Núcleo numérico em NumPy/SciPy, 64 bits | TypeScript, C++ | validação fácil (testes, notebooks), bibliotecas maduras |
+| D3 | Adaptador parametrizado por **perfil JSON** com status `presumido_nao_verificado` | formato fixo no código | o formato real só será conhecido no G0; o perfil é o único ponto a ajustar |
+| D4 | Decodificação **por campo**: zero→ausente, negativo→interpolado (presumido), tokens de ausência configuráveis; nunca valor absoluto global | abs() geral | plano §3 "Regras obrigatórias do importador" |
+| D5 | Reconstrução **cônica (ajuste linear) + resíduo em Zernike ordem 10** com pesos de área; RBF/TPS como segundo método | spline bicúbica, B-splines | derivadas analíticas estáveis; resíduo pequeno; segundo método serve de contraprova |
+| D6 | Curvatura paraxial pelo **Hessiano** da superfície no centro de análise (passo 0,002 mm, gradiente analítico) | ajuste local de esfera | determinístico e verificado (oval de Descartes a 3×10⁻⁶ µm) |
+| D7 | Referência: esfera centrada no raio principal refratado a s' = n/P_eq (média das potências principais); refoco por RMS só como opção registrada | foco marginal, plano fixo | plano §5 "regra inicial proposta"; evita refoco oportunista |
+| D8 | OPL medido até a esfera de referência pelo **lado próximo de F** com extensão virtual do raio refratado | esfera de referência longe da superfície | definição clássica de aberração de frente de onda em espaço imagem; dá W≡0 exato na oval de Descartes |
+| D9 | Sinal: **W = OPL_principal − OPL(raio)** (positivo = adiantada) → esfera com c(4,0) > 0, compatível com o sinal positivo da SA corneana na literatura OSA | sinal oposto | testes `test_sphere_has_positive_primary_sa_matching_seidel` e Seidel analítico |
+| D10 | Zernike OSA ortonormal, ordem 6, índices (n, m) explícitos; RMS HOA = n ≥ 3 | ordem 8; numeração sequencial Noll | plano §5; ambiguidade evitada |
+| D11 | Abertura no **plano corneano** com raios paralelos ao eixo; centro no vértice ou centro pupilar (PUP) | plano pupilar com traçado inverso | primeiro perfil verificável (plano §5); comparador exige perfil correspondente |
+| D12 | Três estados por perfil: disponível / indisponível (motivos) / inválida; limites **provisórios** em `QualityConfig`, todos impressos no relatório | limiar único | plano §7–§8; nada é preenchido silenciosamente |
+| D13 | `analysis_id` = SHA-256 de hashes de entrada + configuração + versões; data separada; reprocessar gera nova análise | contador sequencial | plano §4 "Identidade do cálculo" |
+| D14 | JSON canônico com `null` para ausências; CSV e PDF derivados do mesmo objeto; mapas em NPZ separado | NaN em JSON | plano §4, §7 |
+| D15 | Exames sintéticos com manifesto `synthetic: true` e parâmetros de verdade; nunca misturados a dados reais | nenhum sintético | plano §2 |
+| D16 | Dados nominais **não entram** no pacote (XREFDAT ignorado; manifesto só com códigos) | importar índice de pacientes | LGPD / plano §13 |
+| D17 | Teste de fumaça da interface headless (`--smoke`) no CI e no build Windows | só testes do núcleo | garante que o executável abre e exporta |
+| D18 | **Exigir ≥ 4 casas decimais** na exportação (achado do orçamento de erro) | aceitar 3 casas | viés sistemático de −0,035 µm na SA a 6 mm com 1 µm de quantização |
+
+Pendências abertas (fecham no G0/G1): orientação angular e espelhamento reais; semântica de RAD (plano × arco);
+referência de HIT; formato real de PUP; nomes de arquivo gerados pelo TMS; precisão máxima de exportação.
