@@ -28,9 +28,11 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 
 ## Instalação (Windows)
 
-**Opção A — executável pronto:** baixe `AberrometriaTMS-windows.zip` (ou `AberrometriaTMS-0.1.0-setup.exe`) gerado
-pelo GitHub Actions (aba *Actions* → *Build Windows* → *Artifacts*, ou em *Releases*). Descompacte e abra
-`AberrometriaTMS.exe`. A linha de comando fica em `tmsab.exe` na mesma pasta.
+**Opção A — executável pronto:** baixe `AberrometriaTMS-windows.zip` (ou `AberrometriaTMS-0.1.0-setup.exe`) em
+[Releases](https://github.com/drrodrigomagno01/projeto-aberrometro-tomey-/releases) (gerado pelo GitHub Actions a cada
+versão `v*`; builds intermediários ficam em *Actions → Build Windows → Artifacts*). Descompacte e abra
+`AberrometriaTMS.exe`. A linha de comando fica em `tmsab.exe` na mesma pasta. O Windows SmartScreen pode avisar
+"editor desconhecido" (executável sem assinatura digital): *Mais informações → Executar assim mesmo*.
 
 **Opção B — compilar no seu PC:** instale Python 3.11+ (python.org, marcando "Add to PATH"), abra o
 Prompt de Comando na pasta do projeto e rode `packaging\build_windows.bat`. O resultado fica em

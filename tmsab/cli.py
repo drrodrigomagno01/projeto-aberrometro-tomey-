@@ -313,6 +313,8 @@ def build_parser():
 
 
 def main(argv=None):
+    from . import utf8_console
+    utf8_console()
     args = build_parser().parse_args(argv)
     rc = args.func(args)
     sys.exit(rc or 0)

@@ -121,6 +121,8 @@ def main(argv=None) -> int:
     parser.add_argument("--synth-dir", help="pasta com pacotes sintéticos para o teste de fumaça")
     parser.add_argument("--screenshot", help="salva uma captura da janela no teste de fumaça")
     args = parser.parse_args(argv)
+    from .. import utf8_console
+    utf8_console()
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from .main_window import MainWindow

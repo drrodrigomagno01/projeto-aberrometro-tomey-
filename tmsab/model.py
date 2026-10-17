@@ -73,7 +73,8 @@ class SourceBundle:
     synthetic: bool = False
 
     def hashes(self) -> dict[str, str]:
-        return {f.role + ":" + f.path.split("/")[-1]: f.sha256 for f in self.files}
+        import os
+        return {f.role + ":" + os.path.basename(f.path): f.sha256 for f in self.files}
 
 
 # ---------------------------------------------------------------------------
