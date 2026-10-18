@@ -1,4 +1,4 @@
-name: Build Windows
+name: Build
 
 on:
   push:
@@ -70,3 +70,48 @@ jobs:
           files: |
             AberrometriaTMS-windows.zip
             dist/*-setup.exe
+
+  build-macos:
+    runs-on: macos-latest          # Apple Silicon (arm64)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[gui,dev]"
+      - run: python -m tmsab.cli verify
+      - name: Smoke test da interface (offscreen)
+        run: python -m tmsab.gui.app --smoke
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: PyInstaller (.app)
+        run: pyinstaller packaging/AberrometriaTMS.spec --noconfirm --clean
+      - name: Testa o app
+        run: |
+          ls dist
+          dist/AberrometriaTMS.app/Contents/MacOS/tmsab verify
+          dist/AberrometriaTMS.app/Contents/MacOS/tmsab synth --out synth_ci
+          dist/AberrometriaTMS.app/Contents/MacOS/tmsab analyze synth_ci/SYN-CON_OD --out out_ci --no-pdf
+          QT_QPA_PLATFORM=offscreen dist/AberrometriaTMS.app/Contents/MacOS/AberrometriaTMS --smoke
+      - name: Assinatura ad hoc, DMG e zip
+        run: |
+          VER=$(python -c "import tmsab; print(tmsab.__version__)")
+          codesign --force --deep --sign - dist/AberrometriaTMS.app
+          mkdir -p dmg && cp -R dist/AberrometriaTMS.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "AberrometriaTMS" -srcfolder dmg -ov -format UDZO "AberrometriaTMS-$VER-macos-arm64.dmg"
+          ditto -c -k --keepParent dist/AberrometriaTMS.app "AberrometriaTMS-$VER-macos-arm64.zip"
+          ls -la *.dmg *.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AberrometriaTMS-macos
+          path: |
+            AberrometriaTMS-*-macos-arm64.dmg
+            AberrometriaTMS-*-macos-arm64.zip
+          if-no-files-found: error
+      - name: Release (tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            AberrometriaTMS-*-macos-arm64.dmg
+            AberrometriaTMS-*-macos-arm64.zip

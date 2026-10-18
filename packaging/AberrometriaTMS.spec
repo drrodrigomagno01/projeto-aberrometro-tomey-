@@ -2,7 +2,7 @@
 """PyInstaller — AberrometriaTMS (GUI) + tmsab (CLI) em uma única pasta de distribuição.
 
 Uso (na raiz do repositório):  pyinstaller packaging/AberrometriaTMS.spec --noconfirm
-Resultado: dist/AberrometriaTMS/  (AberrometriaTMS.exe, tmsab.exe e dependências)
+Resultado: dist/AberrometriaTMS/  (AberrometriaTMS.exe, tmsab.exe e dependências); no macOS também dist/AberrometriaTMS.app
 """
 import os
 import sys
@@ -21,6 +21,7 @@ hiddenimports = (
     + collect_submodules("scipy.interpolate")
     + collect_submodules("scipy.optimize")
     + collect_submodules("scipy.stats")
+    + collect_submodules("pypdf")          # auditoria LGPD lê os PDFs gerados
 )
 
 excludes = [
@@ -75,3 +76,25 @@ coll = COLLECT(
     exe_cli, a_cli.binaries, a_cli.zipfiles, a_cli.datas,
     strip=False, upx=False, name="AberrometriaTMS",
 )
+
+if sys.platform == "darwin":
+    # macOS: pacote .app (o executável principal é a interface; a linha de comando fica em
+    # AberrometriaTMS.app/Contents/MacOS/tmsab). Sem assinatura de desenvolvedor: ver README (Gatekeeper).
+    import re as _re
+    _ver = _re.search(r'__version__\s*=\s*"([^"]+)"', open(os.path.join(ROOT, "tmsab", "__init__.py"), encoding="utf-8").read()).group(1)
+    _icns = os.path.join(SPECPATH, "icon.icns")
+    app = BUNDLE(
+        coll,
+        name="AberrometriaTMS.app",
+        icon=_icns if os.path.exists(_icns) else None,
+        bundle_identifier="br.med.aberrometria.tms",
+        info_plist={
+            "CFBundleName": "AberrometriaTMS",
+            "CFBundleDisplayName": "Aberrometria TMS",
+            "CFBundleShortVersionString": _ver,
+            "CFBundleVersion": _ver,
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "12.0",
+            "NSHumanReadableCopyright": "Ferramenta de pesquisa — sem validação clínica",
+        },
+    )

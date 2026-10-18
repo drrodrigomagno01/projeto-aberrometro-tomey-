@@ -280,6 +280,20 @@ def cmd_stats(args):
     return 0
 
 
+def cmd_audit(args):
+    """Auditoria LGPD local: procura os nomes do XREF.dat (lidos e descartados em memória) nos relatórios gerados
+    (JSON, CSV, TXT e PDF quando houver extrator). Imprime apenas contagens — nunca os nomes."""
+    from .adapters.tms4 import audit_reports_for_names
+    res = audit_reports_for_names(args.dir, args.out)
+    print(f"tokens nominais considerados: {res['n_tokens']} | arquivos verificados: {res['n_files']} "
+          f"(PDF {'lidos' if res['pdf_checked'] else 'NÃO lidos — instale pypdf'}) | ocorrências: {res['n_hits']}")
+    for f in res["files_with_hits"]:
+        print(f"  NOME ENCONTRADO em {f}")
+    if res["n_hits"] == 0:
+        print("OK — nenhum nome do XREF aparece nos relatórios.")
+    return 0 if res["n_hits"] == 0 else 3
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="tmsab", description=f"Aberrometria corneana anterior calculada (TMS) — v{CORE_VERSION}")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -334,6 +348,11 @@ def build_parser():
     s = sub.add_parser("verify", help="verificação científica rápida")
     s.add_argument("--pytest", action="store_true", help="roda também a suíte pytest completa")
     s.set_defaults(func=cmd_verify)
+
+    s = sub.add_parser("audit", help="auditoria LGPD: confirma que nenhum nome do XREF aparece nos relatórios (só contagens)")
+    s.add_argument("dir", help="pasta exportada do TMS (com XREF.dat)")
+    s.add_argument("--out", help="pasta dos relatórios (padrão: <dir>/analises)")
+    s.set_defaults(func=cmd_audit)
 
     s = sub.add_parser("stats", help="estatística do piloto (tabela longa)")
     s.add_argument("table"); s.add_argument("--out", required=True)

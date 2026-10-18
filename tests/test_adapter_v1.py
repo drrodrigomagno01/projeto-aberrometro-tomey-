@@ -136,3 +136,20 @@ def test_two_patients_in_one_folder(tmp_path):
     w = next(x for x in an.wavefronts if x.profile.name == "anterior_v1_vertice_4mm")
     assert abs(((w.metrics["eixo_equivalente_deg"] - 172.0) + 90) % 180 - 90) < 1.5
     assert w.metrics["cilindro_equivalente_D"] < -2.0
+
+
+def test_audit_reports_for_names(export_v1, tmp_path):
+    """Auditoria LGPD: relatórios gerados não contêm os nomes do XREF; um arquivo plantado com o nome é detectado."""
+    from tmsab.adapters.tms4 import audit_reports_for_names
+    from tmsab.reporting import export_all
+    ex = import_tms_bundle(export_v1["dir"], exam_id="90001")
+    an, _ = analyze_exam(ex, with_maps=False)
+    out = str(tmp_path / "analises")
+    export_all(ex, an, out)
+    res = audit_reports_for_names(export_v1["dir"], out)
+    assert res["n_tokens"] >= 2 and res["n_files"] >= 3 and res["n_hits"] == 0 and res["files_with_hits"] == []
+    with open(os.path.join(out, "vazamento.txt"), "w", encoding="utf-8") as fh:
+        fh.write("laudo de Sintetico Paciente\n")
+    res2 = audit_reports_for_names(export_v1["dir"], out)
+    assert res2["n_hits"] == 2 and res2["files_with_hits"] == ["vazamento.txt"]
+    assert "SINTETICO" not in json.dumps(res2)

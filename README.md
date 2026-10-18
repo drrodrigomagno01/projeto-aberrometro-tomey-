@@ -8,7 +8,7 @@ versões usadas, com controle de qualidade e proveniência.
 
 Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/2026): seções 1–15 e apêndices.
 
-> **Estado: versão de pesquisa 0.2.1.** O formato real das Data Tables do TMS-4N foi verificado com exames
+> **Estado: versão de pesquisa 0.2.2.** O formato real das Data Tables do TMS-4N foi verificado com exames
 > reais de 3 pacientes (perfil `tms4_datatables_v1`; orientação angular confirmada com astigmatismo de até 2,5 D;
 > marcos G0/G1 fechados — `docs/G0_resultado.md`). Nada aqui é alegação
 > diagnóstica, seleção de LIO ou planejamento terapêutico. Ver `docs/limitacoes.md`.
@@ -22,7 +22,7 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 | §5 Reconstrução (cônica + Zernike ordem 10, ou RBF/spline), traçado de raios, OPD, Zernike OSA ordem 6 | Implementado e verificado contra soluções analíticas |
 | §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows | Implementado |
 | §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) | Implementado |
-| §8 Suíte de verificação (61 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
+| §8 Suíte de verificação (62 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
 | §9 Estatística do piloto (repetibilidade, Bland–Altman com observações repetidas) + protocolo | Implementado (`tmsab stats`) |
 | §0 Inventário da estação / G0–G1 | **Fechados em 18/10/2026** com 14 exames reais de 3 pacientes — `docs/G0_resultado.md` (pendentes: tela "Sobre", olho de calibração, comparador) |
 | §9 Piloto com participantes e comparador | **Depende de dados reais** — `docs/protocolo_piloto.md` |
@@ -31,13 +31,21 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 
 **Opção A — executável pronto:** baixe `AberrometriaTMS-windows.zip` (ou `AberrometriaTMS-<versão>-setup.exe`) em
 [Releases](https://github.com/drrodrigomagno01/projeto-aberrometro-tomey-/releases) (gerado pelo GitHub Actions a cada
-versão `v*`; builds intermediários ficam em *Actions → Build Windows → Artifacts*). Descompacte e abra
+versão `v*`; builds intermediários ficam em *Actions → Build → Artifacts*). Descompacte e abra
 `AberrometriaTMS.exe`. A linha de comando fica em `tmsab.exe` na mesma pasta. O Windows SmartScreen pode avisar
 "editor desconhecido" (executável sem assinatura digital): *Mais informações → Executar assim mesmo*.
 
 **Opção B — compilar no seu PC:** instale Python 3.11+ (python.org, marcando "Add to PATH"), abra o
 Prompt de Comando na pasta do projeto e rode `packaging\build_windows.bat`. O resultado fica em
 `dist\AberrometriaTMS\`.
+
+## Instalação (macOS)
+
+Baixe `AberrometriaTMS-<versão>-macos-arm64.dmg` (Apple Silicon: M1/M2/M3/M4) em Releases ou em *Actions → Build →
+Artifacts*, abra o .dmg e arraste **AberrometriaTMS** para *Aplicativos*. O app não tem assinatura de desenvolvedor
+Apple, então na primeira abertura o macOS bloqueia: vá em *Ajustes do Sistema → Privacidade e Segurança* e clique em
+**"Abrir mesmo assim"** (ou, no Terminal: `xattr -cr /Applications/AberrometriaTMS.app`). A linha de comando fica em
+`/Applications/AberrometriaTMS.app/Contents/MacOS/tmsab`. Macs Intel: use a opção C abaixo ou a versão HTML.
 
 **Opção C — rodar do código-fonte (qualquer sistema):**
 
@@ -77,7 +85,7 @@ sintéticos (perfil v0) — e `tmsab.synthetic.write_export_folder_v1` gera past
 
 ```bash
 tmsab verify          # oval de Descartes (W≡0), esfera vs Seidel, traçado 3D vs referência meridional, sintéticos
-pytest -q             # 61 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
+pytest -q             # 62 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
 ```
 
 Resultados registrados: esfera R=7,8 mm → c(4,0)=+0,0204 µm a 3 mm (Seidel +0,0197); elipsoide Q=−1/n² →

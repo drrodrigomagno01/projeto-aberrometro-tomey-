@@ -321,6 +321,63 @@ def patients_in_xref(xref: dict[str, dict[str, Any]]) -> list[str]:
     return sorted({v["patient_key"] for v in xref.values() if v.get("patient_key")})
 
 
+_AUDIT_STOPWORDS = {"DE", "DA", "DO", "DAS", "DOS", "E", "DEL", "VAN", "VON", "DER", "LA", "LE"}
+
+
+def audit_reports_for_names(directory: str, out_dir: Optional[str] = None) -> dict[str, Any]:
+    """Auditoria LGPD local: lê os tokens de nome do XREF.dat (em memória, descartados ao fim) e procura cada um,
+    como palavra inteira e sem distinção de maiúsculas, nos relatórios de `out_dir` (padrão <directory>/analises)
+    e no nome da própria pasta. Devolve apenas contagens e nomes de ARQUIVO com ocorrências — nunca os tokens."""
+    import csv
+    out_dir = out_dir or os.path.join(directory, "analises")
+    tokens: set[str] = set()
+    xref_path = os.path.join(directory, "XREF.dat")
+    if os.path.isfile(xref_path):
+        with open(xref_path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
+            lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+        start = next((i for i, ln in enumerate(lines[:3]) if "Eye" in ln and "Filename" in ln), 0)
+        for r in csv.DictReader(lines[start:]):
+            for col in XREF_IDENTITY_COLUMNS:
+                for tok in str(r.get(col) or "").split():
+                    if len(tok) >= 3 and tok.upper() not in _AUDIT_STOPWORDS:
+                        tokens.add(tok.upper())
+    for tok in os.path.basename(os.path.abspath(directory).rstrip("/\\")).replace("_", " ").split():
+        if len(tok) >= 3 and tok.upper() not in _AUDIT_STOPWORDS:
+            tokens.add(tok.upper())
+    res: dict[str, Any] = {"n_tokens": len(tokens), "n_files": 0, "n_hits": 0, "files_with_hits": [], "pdf_checked": True}
+    if not tokens or not os.path.isdir(out_dir):
+        return res
+    rx = re.compile(r"(?<![A-ZÀ-Ü0-9])(" + "|".join(re.escape(t) for t in sorted(tokens, key=len, reverse=True)) + r")(?![A-ZÀ-Ü0-9])")
+    try:
+        from pypdf import PdfReader  # opcional
+    except Exception:  # noqa: BLE001
+        PdfReader = None
+        res["pdf_checked"] = False
+    for name in sorted(os.listdir(out_dir)):
+        path = os.path.join(out_dir, name)
+        if not os.path.isfile(path):
+            continue
+        low = name.lower()
+        if low.endswith(".pdf"):
+            if PdfReader is None:
+                continue
+            try:
+                text = "\n".join((pg.extract_text() or "") for pg in PdfReader(path).pages)
+            except Exception:  # noqa: BLE001
+                continue
+        elif low.endswith((".json", ".csv", ".txt", ".md")):
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        else:
+            continue
+        res["n_files"] += 1
+        n = len(rx.findall(text.upper()))
+        if n:
+            res["n_hits"] += n
+            res["files_with_hits"].append(name)
+    return res
+
+
 def detect_profile(directory: str) -> str:
     """Escolhe o perfil pelo padrão dos nomes: formato real do TMS-4N (HIT_1_53703.dat) ou pacote v0/sintético."""
     names = os.listdir(directory) if os.path.isdir(directory) else []
