@@ -23,6 +23,18 @@ jobs:
       - run: python -m pytest -q
       - run: python -m tmsab.cli verify
       - run: QT_QPA_PLATFORM=offscreen python -m tmsab.gui.app --smoke
+      - name: Versão HTML (arquivo único, roda no navegador via Pyodide)
+        run: python web/build_html.py --out dist_html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AberrometriaTMS-html
+          path: dist_html/AberrometriaTMS-*.html
+          if-no-files-found: error
+      - name: Release (tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist_html/AberrometriaTMS-*.html
 
   build-windows:
     runs-on: windows-latest

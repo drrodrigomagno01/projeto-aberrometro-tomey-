@@ -44,3 +44,9 @@ anonimização**: quem tem a lista de pacientes da clínica pode recompor a corr
 exportada e a subpasta `analises/` continuam sendo dados pessoais sob a LGPD e devem ficar no ambiente da clínica.
 O próprio `XREF.dat` exportado pelo TMS contém o nome: não o copie para fora da estação. Dados reais só entram em
 desenvolvimento assistido por IA nos ambientes e condições aprovados.
+
+## Versão HTML
+
+Precisa de internet na primeira abertura (motor Pyodide + NumPy/SciPy/Matplotlib do CDN jsdelivr; depois fica em
+cache do navegador); os dados dos exames nunca saem do computador. Cálculo ~3× mais lento que o programa nativo.
+Safari: a seleção de pasta funciona pelo diálogo de arquivos; o arrastar-e-soltar de pastas depende da versão.

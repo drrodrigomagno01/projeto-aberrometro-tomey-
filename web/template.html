@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aberrometria TMS — versão HTML</title>
+<meta name="description" content="Aberrometria corneana anterior calculada a partir das Data Tables do Tomey TMS — roda inteiramente no navegador.">
+<style>
+:root { --fg:#111; --muted:#555; --line:#ccd; --bg:#f4f5f8; --accent:#1a4f8a; --ok:#1b5e20; --warn:#8a6d00; --err:#8B0000; }
+* { box-sizing: border-box; }
+body { margin:0; font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:var(--fg); background:var(--bg); font-size:14px; }
+.app { max-width:1100px; margin:0 auto; padding:16px; }
+h1 { font-size:20px; margin:0 0 4px; }
+.sub { color:var(--muted); font-size:12.5px; margin:0 0 12px; }
+.card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin:10px 0; }
+.row { display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center; }
+button { font:inherit; padding:7px 14px; border-radius:6px; border:1px solid #9ab; background:#eef3fa; color:var(--accent); cursor:pointer; }
+button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+button:disabled { opacity:.5; cursor:default; }
+label.opt { font-size:13px; color:#333; }
+.drop { border:2px dashed #9ab; border-radius:8px; padding:14px; text-align:center; color:var(--muted); margin-top:10px; }
+.drop.over { background:#eef3fa; border-color:var(--accent); }
+#status { font-size:13px; color:var(--muted); min-height:18px; }
+#status.err { color:var(--err); }
+progress { width:100%; height:10px; }
+table.exames { border-collapse:collapse; width:100%; font-size:12.5px; }
+table.exames th, table.exames td { border:1px solid var(--line); padding:4px 6px; text-align:center; }
+table.exames th { background:#eef1f7; }
+.ok { color:var(--ok); font-weight:bold; } .warn { color:var(--warn); } .err { color:var(--err); font-weight:bold; }
+.toolbar { display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 4px; }
+.toolbar a, .toolbar button { font-size:12px; padding:4px 10px; }
+.small { font-size:12px; color:var(--muted); }
+.privacy { font-size:12px; color:#2b4a2f; background:#eef7ee; border:1px solid #cde3cf; border-radius:6px; padding:8px 10px; }
+{{REPORT_CSS}}
+@media print { .app > .card, .app > h1, .app > .sub, .toolbar, .no-print { display:none !important; } .app { max-width:none; padding:0; } body { background:#fff; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Aberrometria corneana anterior calculada — Tomey TMS <span class="small">(versão HTML {{VERSION}})</span></h1>
+  <p class="sub">Ferramenta de pesquisa. Roda inteiramente dentro do navegador (Python/NumPy/SciPy em WebAssembly, via Pyodide): sem servidor, sem banco de dados — nenhum dado sai do computador. Na primeira abertura o navegador baixa o motor (~35 MB, fica em cache). Chrome, Edge ou Safari.</p>
+
+  <div class="card no-print">
+    <div class="row">
+      <button id="btnFolder" class="primary" disabled>1. Escolher pasta exportada do TMS…</button>
+      <button id="btnFiles" disabled>…ou escolher os arquivos (HIT, RAD, PUP, AVE, XREF…)</button>
+      <span id="engine" class="small">motor: carregando…</span>
+    </div>
+    <input type="file" id="inpFolder" webkitdirectory directory multiple style="display:none">
+    <input type="file" id="inpFiles" multiple accept=".dat,.DAT,.csv,.json" style="display:none">
+    <div id="drop" class="drop">ou arraste a pasta do paciente para cá</div>
+    <div class="row" style="margin-top:10px">
+      <label class="opt">Centro: <select id="optCenter"><option value="ambos">vértice e pupila</option><option value="vertice">vértice</option><option value="pupila">pupila</option></select></label>
+      <label class="opt"><input type="checkbox" id="d4" checked> 4 mm</label>
+      <label class="opt"><input type="checkbox" id="d6" checked> 6 mm</label>
+      <label class="opt">Zernike ordem <input type="number" id="optOrder" value="6" min="4" max="8" style="width:48px"></label>
+      <label class="opt"><input type="checkbox" id="optPdf" checked> gerar também PDF por exame</label>
+    </div>
+    <p class="privacy">O navegador pode perguntar se deseja "enviar/carregar" os arquivos: é apenas a leitura local pela página — nada é enviado. Nomes de pacientes (XREF.dat) nunca entram nos relatórios; o código do estudo é um hash. Pastas com <code>analises/</code> são ignoradas.</p>
+    <div id="status">aguardando o motor…</div>
+    <progress id="prog" value="0" max="100" style="display:none"></progress>
+  </div>
+
+  <div class="card no-print" id="examsCard" style="display:none">
+    <div class="row" style="justify-content:space-between">
+      <b>Exames encontrados</b>
+      <span>
+        <button id="btnPrint" class="primary" disabled>Imprimir relatório (todos os exames)</button>
+        <button id="btnSaveHtml" disabled>Salvar relatório (.html)</button>
+      </span>
+    </div>
+    <div id="folderWarnings"></div>
+    <table class="exames"><thead><tr><th>Código</th><th>Exame</th><th>Olho</th><th>Captura</th><th>Data/hora</th><th>SimK (TMS)</th><th>Estado</th></tr></thead><tbody id="examRows"></tbody></table>
+  </div>
+
+  <main class="relatorio" id="report"></main>
+</div>
+
+<script>
+"use strict";
+const CFG = { version: "{{VERSION}}", pyodideURL: "{{PYODIDE_URL}}" };
+const TMSAB_ZIP_B64 = "{{TMSAB_ZIP_B64}}";
+const REPORT_CSS = {{REPORT_CSS_JSON}};
+
+// ----------------------------------------------------------------------------- motor (Web Worker)
+const ENGINE_SRC = String.raw`
+function setupEngine(post) {
+  let pyodide = null;
+  const PY_BOOT = [
+    "import sys, json",
+    "sys.path.insert(0, '/app')",
+    "import matplotlib; matplotlib.use('Agg')",
+    "import tmsab, tmsab.web",
+    "def _list(d):",
+    "    return json.dumps(tmsab.web.list_folder(d), ensure_ascii=False)",
+    "def _analyze(d, exam, opts):",
+    "    def prog(msg):",
+    "        _js_progress(str(msg))",
+    "    r = tmsab.web.analyze_exam_html(d, exam or None, json.loads(opts), progress=prog)",
+    "    return json.dumps(r, ensure_ascii=False)",
+    "tmsab.__version__"
+  ].join("\n");
+  async function loadScriptAny(url) {
+    if (typeof importScripts === "function") { importScripts(url); return; }
+    await new Promise((res, rej) => { const s = document.createElement("script"); s.src = url; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+  }
+  async function init(cfg, zipBytes) {
+    try {
+      post({ type: "status", text: "baixando o motor Python (Pyodide)…" });
+      await loadScriptAny(cfg.pyodideURL + "pyodide.js");
+      pyodide = await loadPyodide({ indexURL: cfg.pyodideURL });
+      post({ type: "status", text: "carregando NumPy, SciPy e Matplotlib (primeira vez: ~35 MB)…" });
+      await pyodide.loadPackage(["numpy", "scipy", "matplotlib"], { messageCallback: (m) => post({ type: "status", text: m }) });
+      pyodide.FS.mkdirTree("/app"); pyodide.FS.mkdirTree("/data");
+      pyodide.unpackArchive(zipBytes, "zip", { extractDir: "/app" });
+      pyodide.globals.set("_js_progress", (s) => post({ type: "progress", text: s }));
+      post({ type: "status", text: "iniciando o núcleo tmsab…" });
+      const ver = await pyodide.runPythonAsync(PY_BOOT);
+      post({ type: "ready", version: String(ver) });
+    } catch (e) {
+      post({ type: "fatal", text: String(e && e.message ? e.message : e) });
+    }
+  }
+  function writeFiles(dir, files) {
+    const base = "/data/" + dir;
+    pyodide.FS.mkdirTree(base);
+    for (const f of files) {
+      pyodide.FS.writeFile(base + "/" + f.name, new Uint8Array(f.data));
+    }
+    return base;
+  }
+  async function handle(msg) {
+    if (msg.type === "init") return init(msg.cfg, msg.zip);
+    if (msg.type === "files") {
+      try {
+        const base = writeFiles(msg.dir, msg.files);
+        const r = pyodide.runPython("_list(" + JSON.stringify(base) + ")");
+        post({ type: "listed", dir: msg.dir, base, result: JSON.parse(r) });
+      } catch (e) { post({ type: "error", dir: msg.dir, text: String(e) }); }
+      return;
+    }
+    if (msg.type === "analyze") {
+      try {
+        const r = pyodide.runPython("_analyze(" + JSON.stringify(msg.base) + ", " + JSON.stringify(msg.exam || "") + ", " + JSON.stringify(JSON.stringify(msg.opts)) + ")");
+        post({ type: "result", dir: msg.dir, exam: msg.exam, result: JSON.parse(r) });
+      } catch (e) { post({ type: "result", dir: msg.dir, exam: msg.exam, result: { error: String(e), exam_id: msg.exam } }); }
+      return;
+    }
+  }
+  return { init, handle };
+}
+`;
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status"), progEl = $("prog"), engineEl = $("engine");
+let engineSend = null, engineReady = false;
+const pending = [];          // fila de exames a analisar
+let busy = false;
+const results = {};          // chave dir#exam → resultado
+
+function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls || ""; }
+function b64ToBytes(b64) { const bin = atob(b64); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+
+function onEngineMessage(m) {
+  if (m.type === "status") { setStatus(m.text); return; }
+  if (m.type === "progress") { setStatus("calculando… " + m.text); return; }
+  if (m.type === "fatal") { setStatus("Falha ao carregar o motor: " + m.text + " — verifique a conexão com a internet (o motor é baixado de cdn.jsdelivr.net na primeira vez).", "err"); engineEl.textContent = "motor: indisponível"; return; }
+  if (m.type === "ready") { engineReady = true; engineEl.textContent = "motor: pronto (tmsab " + m.version + ")"; setStatus("Pronto. Escolha a pasta exportada do TMS (Ferramentas → Tabelas de Dados)."); $("btnFolder").disabled = false; $("btnFiles").disabled = false; return; }
+  if (m.type === "listed") { onListed(m); return; }
+  if (m.type === "error") { setStatus("Erro na pasta " + m.dir + ": " + m.text, "err"); busy = false; next(); return; }
+  if (m.type === "result") { onResult(m); return; }
+}
+
+function startEngine() {
+  const zip = b64ToBytes(TMSAB_ZIP_B64);
+  try {
+    const blob = new Blob([ENGINE_SRC, "\nconst __eng = setupEngine((m) => self.postMessage(m)); self.onmessage = (e) => __eng.handle(e.data);"], { type: "application/javascript" });
+    const w = new Worker(URL.createObjectURL(blob));
+    let failed = false;
+    w.onerror = (e) => { if (!engineReady && !failed) { failed = true; console.warn("worker falhou, usando a página principal", e.message); startEngineMainThread(zip); } };
+    w.onmessage = (e) => onEngineMessage(e.data);
+    engineSend = (m, transfer) => w.postMessage(m, transfer || []);
+    engineSend({ type: "init", cfg: CFG, zip }, [zip.buffer]);
+  } catch (e) { startEngineMainThread(zip); }
+}
+function startEngineMainThread(zip) {
+  // alternativa sem Web Worker (a página fica ocupada durante o cálculo)
+  const fn = new Function(ENGINE_SRC + "\nreturn setupEngine;")();
+  const eng = fn(onEngineMessage);
+  engineSend = (m) => { eng.handle(m); };
+  engineSend({ type: "init", cfg: CFG, zip: b64ToBytes(TMSAB_ZIP_B64) });
+}
+
+// ----------------------------------------------------------------------------- entrada de arquivos
+const ACCEPT = /\.(dat|csv|json)$/i;
+function groupFiles(list) {
+  // agrupa por pasta (webkitRelativePath); ignora subpastas 'analises'
+  const groups = new Map();
+  for (const f of list) {
+    if (!ACCEPT.test(f.name) || f.size > 30 * 1024 * 1024) continue;
+    const rel = f.webkitRelativePath || f.name;
+    const parts = rel.split("/");
+    if (parts.some((p) => p.toLowerCase() === "analises")) continue;
+    const dir = parts.length > 1 ? parts.slice(0, -1).join("/") : "exportacao";
+    if (!groups.has(dir)) groups.set(dir, []);
+    groups.get(dir).push(f);
+  }
+  return groups;
+}
+async function ingest(fileList) {
+  if (!engineReady) { setStatus("O motor ainda não está pronto.", "err"); return; }
+  const groups = groupFiles(Array.from(fileList));
+  let n = 0;
+  for (const [dir, files] of groups) {
+    if (!files.some((f) => /^(HIT|RAD)_/i.test(f.name) || /\.(csv|json)$/i.test(f.name))) continue;
+    const payload = [];
+    for (const f of files) payload.push({ name: f.name, data: await f.arrayBuffer() });
+    const safeDir = dir.replace(/[^\w .\-À-ſ]+/g, "_").slice(-80);
+    setStatus("lendo " + files.length + " arquivos de '" + dir + "'…");
+    engineSend({ type: "files", dir: safeDir, files: payload }, payload.map((p) => p.data));
+    n++;
+  }
+  if (!n) setStatus("Nenhum arquivo HIT_/RAD_ (Data Tables do TMS) encontrado na seleção.", "err");
+}
+$("btnFolder").onclick = async () => {
+  if (window.showDirectoryPicker) {
+    try {
+      const h = await window.showDirectoryPicker({ mode: "read" });
+      const files = [];
+      async function walk(handle, prefix) {
+        for await (const [name, child] of handle.entries()) {
+          if (child.kind === "file") { const f = await child.getFile(); Object.defineProperty(f, "webkitRelativePath", { value: prefix + "/" + name }); files.push(f); }
+          else if (name.toLowerCase() !== "analises") await walk(child, prefix + "/" + name);
+        }
+      }
+      await walk(h, h.name);
+      ingest(files);
+      return;
+    } catch (e) { if (e && e.name === "AbortError") return; /* senão cai no input */ }
+  }
+  $("inpFolder").click();
+};
+$("btnFiles").onclick = () => $("inpFiles").click();
+$("inpFolder").onchange = (e) => ingest(e.target.files);
+$("inpFiles").onchange = (e) => ingest(e.target.files);
+const drop = $("drop");
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = async (e) => {
+  e.preventDefault(); drop.classList.remove("over");
+  const files = [];
+  async function readEntry(entry, prefix) {
+    if (entry.isFile) { const f = await new Promise((r) => entry.file(r)); Object.defineProperty(f, "webkitRelativePath", { value: prefix + entry.name }); files.push(f); }
+    else if (entry.isDirectory && entry.name.toLowerCase() !== "analises") {
+      const reader = entry.createReader();
+      let batch;
+      do { batch = await new Promise((r) => reader.readEntries(r)); for (const en of batch) await readEntry(en, prefix + entry.name + "/"); } while (batch.length);
+    }
+  }
+  const items = Array.from(e.dataTransfer.items || []);
+  for (const it of items) { const en = it.webkitGetAsEntry && it.webkitGetAsEntry(); if (en) await readEntry(en, ""); }
+  if (!files.length) for (const f of Array.from(e.dataTransfer.files || [])) files.push(f);
+  ingest(files);
+};
+
+// ----------------------------------------------------------------------------- listagem e fila
+function currentOptions() {
+  const c = $("optCenter").value;
+  const centers = c === "ambos" ? ["vertice", "pupila"] : [c];
+  const diameters = []; if ($("d4").checked) diameters.push(4.0); if ($("d6").checked) diameters.push(6.0);
+  return { centers, diameters: diameters.length ? diameters : [6.0], zernike_order: parseInt($("optOrder").value || "6", 10), maps: true, pdf: $("optPdf").checked };
+}
+function fmtDate(iso) { return iso ? iso.replace("T", " ") : "—"; }
+function onListed(m) {
+  const r = m.result;
+  $("examsCard").style.display = "";
+  const fw = $("folderWarnings");
+  for (const w of r.warnings || []) { const p = document.createElement("p"); p.className = "warn"; p.textContent = "Aviso (" + m.dir + "): " + w; fw.appendChild(p); }
+  if (!r.exams.length) { setStatus("Nenhum exame reconhecido em '" + m.dir + "'.", "err"); return; }
+  for (const e of r.exams) {
+    const key = m.dir + "#" + (e.exam_id || "");
+    const tr = document.createElement("tr"); tr.id = "row-" + cssKey(key);
+    const simk = e.simk && e.simk.SimK1 != null ? (e.simk.SimK1.toFixed(2) + " D @ " + Math.round(e.simk["SimK1 Ang."]) + "° / " + e.simk.SimK2.toFixed(2) + " D; CYL " + e.simk.CYL.toFixed(2)) : "—";
+    tr.innerHTML = "<td>" + esc(e.patient_key || "—") + "</td><td>" + esc(e.exam_id || "(pacote)") + "</td><td>" + esc(e.eye || "?") + "</td><td>" + esc(e.capture_index != null ? e.capture_index : "—") + "</td><td>" + esc(fmtDate(e.acquired_at)) + "</td><td>" + esc(simk) + "</td><td class='st'>na fila</td>";
+    $("examRows").appendChild(tr);
+    pending.push({ key, dir: m.dir, base: m.base, exam: e.exam_id || "" });
+  }
+  setStatus(pending.length + " exame(s) na fila…");
+  next();
+}
+function cssKey(s) { return s.replace(/[^A-Za-z0-9_-]/g, "_"); }
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function next() {
+  if (busy || !pending.length) { if (!pending.length && !busy) { progEl.style.display = "none"; } return; }
+  busy = true;
+  const job = pending.shift();
+  const row = document.getElementById("row-" + cssKey(job.key));
+  if (row) row.querySelector(".st").innerHTML = "<span class='warn'>calculando…</span>";
+  progEl.style.display = ""; progEl.removeAttribute("value");
+  setStatus("calculando exame " + (job.exam || "") + "…");
+  engineSend({ type: "analyze", dir: job.dir, base: job.base, exam: job.exam, opts: currentOptions() });
+}
+function onResult(m) {
+  busy = false;
+  const r = m.result, key = m.dir + "#" + (m.exam || "");
+  const row = document.getElementById("row-" + cssKey(key));
+  if (r.error) {
+    if (row) row.querySelector(".st").innerHTML = "<span class='err'>inválida</span> " + esc(r.error);
+    next(); return;
+  }
+  results[key] = r;
+  if (row) {
+    const ok = r.summary.profiles.filter((p) => p.validity === "disponivel").length;
+    row.querySelector(".st").innerHTML = "<span class='ok'>calculado</span> (" + ok + "/" + r.summary.profiles.length + " perfis)";
+    row.cells[0].textContent = r.study_id || row.cells[0].textContent;
+  }
+  const wrap = document.createElement("div");
+  wrap.innerHTML = r.html;
+  const art = wrap.firstElementChild;
+  const tb = document.createElement("div"); tb.className = "toolbar no-print";
+  tb.appendChild(dlButton("Baixar JSON", r.json, "application/json", r.stem + ".json"));
+  tb.appendChild(dlButton("Baixar CSV", r.csv, "text/csv", r.stem + ".csv"));
+  if (r.pdf_b64) tb.appendChild(dlButton("Baixar PDF (idêntico ao programa)", b64ToBytes(r.pdf_b64), "application/pdf", r.stem + ".pdf"));
+  const bp = document.createElement("button"); bp.textContent = "Imprimir só este exame"; bp.onclick = () => printOnly(art); tb.appendChild(bp);
+  art.insertBefore(tb, art.firstChild);
+  $("report").appendChild(art);
+  $("btnPrint").disabled = false; $("btnSaveHtml").disabled = false;
+  setStatus("Exame " + r.exam_id + " " + (r.eye || "") + " calculado (análise " + r.analysis_id.slice(0, 8) + "…).");
+  next();
+}
+function dlButton(label, data, mime, filename) {
+  const a = document.createElement("a"); a.textContent = label; a.href = URL.createObjectURL(new Blob([data], { type: mime })); a.download = filename;
+  a.className = "btn"; a.style.cssText = "font-size:12px;padding:4px 10px;border:1px solid #9ab;border-radius:6px;background:#eef3fa;color:#1a4f8a;text-decoration:none;";
+  return a;
+}
+
+// ----------------------------------------------------------------------------- impressão e salvamento
+function openDetailsForPrint(open) { document.querySelectorAll("details.zern").forEach((d) => { if (open) { d.dataset.was = d.open ? "1" : "0"; d.open = true; } else if (d.dataset.was === "0") d.open = false; }); }
+window.addEventListener("beforeprint", () => openDetailsForPrint(true));
+window.addEventListener("afterprint", () => openDetailsForPrint(false));
+$("btnPrint").onclick = () => { document.querySelectorAll("article.exame").forEach((a) => (a.style.display = "")); window.print(); };
+function printOnly(art) {
+  const all = Array.from(document.querySelectorAll("article.exame"));
+  all.forEach((a) => (a.style.display = a === art ? "" : "none"));
+  const restore = () => { all.forEach((a) => (a.style.display = "")); window.removeEventListener("afterprint", restore); };
+  window.addEventListener("afterprint", restore);
+  window.print();
+}
+$("btnSaveHtml").onclick = () => {
+  const main = document.getElementById("report").cloneNode(true);
+  main.querySelectorAll(".toolbar").forEach((t) => t.remove());
+  main.querySelectorAll("article.exame").forEach((a) => (a.style.display = ""));
+  const doc = "<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><title>Aberrometria corneana anterior calculada — relatório</title><style>" + REPORT_CSS +
+    "</style></head><body><main class='relatorio'><h1>Aberrometria corneana anterior calculada — relatório de pesquisa (tmsab " + esc(CFG.version) + ")</h1>" + main.innerHTML +
+    "</main><script>window.addEventListener('beforeprint',()=>document.querySelectorAll('details.zern').forEach(d=>d.open=true));<\/script></body></html>";
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([doc], { type: "text/html" }));
+  const ids = Object.values(results).map((r) => r.study_id).filter((v, i, s) => s.indexOf(v) === i).join("_") || "relatorio";
+  a.download = "relatorio_" + ids + ".html"; a.click();
+};
+
+startEngine();
+</script>
+</body>
+</html>

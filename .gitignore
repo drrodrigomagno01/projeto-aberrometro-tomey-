@@ -10,3 +10,4 @@ out_ci/
 .pytest_cache/
 examples/*/
 !examples/README.md
+dist_html/

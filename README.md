@@ -20,9 +20,9 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 | §3 Adaptador TMS-4/4N (HIT, RAD, PUP, AVE, DIO/POW/ROC/RNG; XREF sem nomes; ausências e interpolados; hashes) | Implementado e **verificado com exames reais** (`tms4_datatables_v1`); perfil v0 mantido para pacotes sintéticos |
 | §4 Contrato de dados, máscaras, identidade do cálculo por hash | Implementado |
 | §5 Reconstrução (cônica + Zernike ordem 10, ou RBF/spline), traçado de raios, OPD, Zernike OSA ordem 6 | Implementado e verificado contra soluções analíticas |
-| §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows | Implementado |
+| §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows/macOS + versão HTML (Pyodide) | Implementado |
 | §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) | Implementado |
-| §8 Suíte de verificação (62 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
+| §8 Suíte de verificação (66 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
 | §9 Estatística do piloto (repetibilidade, Bland–Altman com observações repetidas) + protocolo | Implementado (`tmsab stats`) |
 | §0 Inventário da estação / G0–G1 | **Fechados em 18/10/2026** com 14 exames reais de 3 pacientes — `docs/G0_resultado.md` (pendentes: tela "Sobre", olho de calibração, comparador) |
 | §9 Piloto com participantes e comparador | **Depende de dados reais** — `docs/protocolo_piloto.md` |
@@ -46,6 +46,18 @@ Artifacts*, abra o .dmg e arraste **AberrometriaTMS** para *Aplicativos*. O app 
 Apple, então na primeira abertura o macOS bloqueia: vá em *Ajustes do Sistema → Privacidade e Segurança* e clique em
 **"Abrir mesmo assim"** (ou, no Terminal: `xattr -cr /Applications/AberrometriaTMS.app`). A linha de comando fica em
 `/Applications/AberrometriaTMS.app/Contents/MacOS/tmsab`. Macs Intel: use a opção C abaixo ou a versão HTML.
+
+## Versão HTML (qualquer computador, sem instalar nada)
+
+`AberrometriaTMS-<versão>.html` (em Releases / *Actions → Build → Artifacts*, ou gerado por `python web/build_html.py`)
+é um **arquivo único** que roda no Chrome, Edge ou Safari: o mesmo núcleo Python (NumPy/SciPy/Matplotlib) executa
+dentro do navegador via Pyodide/WebAssembly — **sem servidor, sem banco de dados, nenhum dado sai do computador**.
+Na primeira abertura o navegador baixa o motor (~35 MB de cdn.jsdelivr.net; fica em cache). Uso: abrir o .html →
+*Escolher pasta exportada do TMS* (o navegador pergunta se pode "carregar" os arquivos: é leitura local) → os exames
+são calculados um a um (~10 s cada) → **Imprimir relatório** (⌘P/Ctrl+P → impressora ou PDF), *Salvar relatório
+(.html)* ou baixar JSON/CSV/PDF por exame. Os números são idênticos aos do programa de computador (mesmo código;
+verificado a 12 casas decimais). Pastas com subpastas (uma por exportação) e pastas com dois pacientes são tratadas
+como no programa.
 
 **Opção C — rodar do código-fonte (qualquer sistema):**
 
@@ -85,7 +97,7 @@ sintéticos (perfil v0) — e `tmsab.synthetic.write_export_folder_v1` gera past
 
 ```bash
 tmsab verify          # oval de Descartes (W≡0), esfera vs Seidel, traçado 3D vs referência meridional, sintéticos
-pytest -q             # 62 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
+pytest -q             # 66 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
 ```
 
 Resultados registrados: esfera R=7,8 mm → c(4,0)=+0,0204 µm a 3 mm (Seidel +0,0197); elipsoide Q=−1/n² →
@@ -98,6 +110,7 @@ quantização sistemática por anel; com 4 casas o erro cai para 0,004 µm (`doc
 ```
 tmsab/            núcleo: model, adapters/, geometry, optics, zernike, quality, pipeline, reporting, plots, stats, synthetic, cli
 tmsab/gui/        programa desktop (PySide6)
+tmsab/web.py      versão navegador (chamado pelo Pyodide); web/template.html + web/build_html.py geram o .html único
 tmsab/reference/  traçado meridional independente (verificação)
 tests/            suíte pytest (§8)
 docs/             G0_checklist, G0_resultado, dicionario_campos, convencoes, validacao, protocolo_piloto, decisoes, limitacoes
