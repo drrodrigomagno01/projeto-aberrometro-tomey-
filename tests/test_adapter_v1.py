@@ -87,3 +87,52 @@ def test_reports_contain_no_names(export_v1, tmp_path):
     for k in ("json", "csv"):
         txt = open(paths[k], encoding="utf-8").read()
         assert "SINTETICO" not in txt and "PACIENTE" not in txt
+    assert os.path.basename(paths["json"]).startswith(ex.identity.study_id + "_90001_OD_")
+
+
+def test_study_code_from_xref_is_stable_across_folders(tmp_path):
+    """O código de estudo vem do XREF (hash do nome/ID): o mesmo paciente exportado para pastas com nomes
+    diferentes recebe o mesmo código; pacientes diferentes recebem códigos diferentes; o nome nunca aparece."""
+    spec = [SyntheticSpec(exam_id="X", R=7.8, Q=-0.2, eye="OD", decimals=4)]
+    write_export_folder_v1(spec, str(tmp_path / "pasta um"), first_exam=100, patient_name=("SOBRENOME", "NOME"))
+    write_export_folder_v1(spec, str(tmp_path / "pasta dois"), first_exam=100, patient_name=("SOBRENOME", "NOME"))
+    write_export_folder_v1(spec, str(tmp_path / "pasta tres"), first_exam=100, patient_name=("OUTRO", "NOME"))
+    a = import_tms_bundle(str(tmp_path / "pasta um"))
+    b = import_tms_bundle(str(tmp_path / "pasta dois"))
+    c = import_tms_bundle(str(tmp_path / "pasta tres"))
+    assert a.identity.study_id == b.identity.study_id != c.identity.study_id
+    assert a.identity.study_id.startswith("P-") and len(a.identity.study_id) == 10
+    for ex in (a, b, c):
+        blob = json.dumps(ex.bundle.export_settings) + ex.identity.study_id + " ".join(ex.diagnostics + ex.warnings)
+        assert "SOBRENOME" not in blob and "OUTRO" not in blob and "NOME" not in blob
+    # exportações repetidas do mesmo exame produzem arquivos idênticos → mesma identidade de cálculo
+    an_a, _ = analyze_exam(a, with_maps=False)
+    an_b, _ = analyze_exam(b, with_maps=False)
+    assert an_a.analysis_id == an_b.analysis_id
+
+
+def test_two_patients_in_one_folder(tmp_path):
+    """Exportar de novo para a mesma pasta: o TMS acrescenta linhas ao XREF.dat → dois pacientes na pasta.
+    O programa separa-os pelo código, conta capturas por paciente/olho e avisa."""
+    d = str(tmp_path / "mista")
+    write_export_folder_v1([SyntheticSpec(exam_id="X", R=7.8, Q=-0.2, eye="OD", decimals=4),
+                            SyntheticSpec(exam_id="X", R=7.8, Q=-0.2, eye="OD", decimals=4)],
+                           d, first_exam=200, patient_name=("PRIMEIRO", "PACIENTE"))
+    write_export_folder_v1([SyntheticSpec(exam_id="X", R=7.6, Q=-0.3, cyl_D=2.5, axis_deg=172.0, eye="OD", decimals=4)],
+                           d, first_exam=300, patient_name=("SEGUNDO", "PACIENTE"), append=True, date_str="05/08/2026")
+    x = read_xref(os.path.join(d, "XREF.dat"))
+    assert set(x) == {"200", "201", "300"}
+    exams = {e["exam_id"]: e for e in list_exams(d)}
+    assert exams["200"]["patient_key"] == exams["201"]["patient_key"] != exams["300"]["patient_key"]
+    assert [exams[k]["capture_index"] for k in ("200", "201", "300")] == [1, 2, 1]
+    e1 = import_tms_bundle(d, exam_id="201")
+    e2 = import_tms_bundle(d, exam_id="300")
+    assert e1.identity.study_id != e2.identity.study_id
+    assert e1.identity.capture_index == 2 and e2.identity.capture_index == 1
+    assert e1.bundle.export_settings["patients_in_folder"] == 2
+    assert any("2 pacientes" in w for w in e1.warnings) and any("2 pacientes" in w for w in e2.warnings)
+    assert "PRIMEIRO" not in " ".join(e1.warnings + e2.warnings + e1.diagnostics + e2.diagnostics)
+    an, _ = analyze_exam(e2, with_maps=False)
+    w = next(x for x in an.wavefronts if x.profile.name == "anterior_v1_vertice_4mm")
+    assert abs(((w.metrics["eixo_equivalente_deg"] - 172.0) + 90) % 180 - 90) < 1.5
+    assert w.metrics["cilindro_equivalente_D"] < -2.0

@@ -46,13 +46,53 @@ Orientação das tabelas: **Angle** (linhas por ângulo). O programa detecta o p
 
 Conclusão: **G0 e G1 fechados** para o perfil `tms4_datatables_v1` (status `verificado_estrutura`). A
 convenção angular (0° às 3 horas, anti-horário na vista do observador, sem espelhamento) está confirmada pelo
-eixo do astigmatismo em ambos os olhos; um caso com astigmatismo ≥ 1,5 D reforçaria a evidência (o deste
-paciente é de 0,3–0,4 D, e o próprio TMS varia 13–22° entre SimK e Fourier nesse nível).
+eixo do astigmatismo em ambos os olhos; o ensaio da seção 4, com astigmatismo de 1,7–2,5 D, fecha a questão.
 
-## 4. Pendências
+## 4. Segundo lote (18/10/2026): três pacientes, astigmatismo até 2,5 D
+
+Arquivos recebidos por e-mail (zip), exportados da mesma estação: pasta com 6 exames (os 4 do paciente A e
+2 de um paciente B, 05/08/2026), pasta com os mesmos 4 exames do paciente A, e uma pasta com quatro subpastas
+`topo 1..4`, cada uma com os 4 exames de um paciente C (28/11/2025). Nenhum nome entrou no projeto.
+
+**Orientação angular — ensaio decisivo.** Meridiano mais curvo calculado (eixo do cilindro negativo − 90°)
+contra SimK1 Ang. e eixo Fourier 6 mm do próprio TMS:
+
+| Exame | Olho | CYL TMS (D) | SimK íngreme | Fourier 6 mm | Calculado 4 mm | Calculado 6 mm | Δ |
+|---|---|---|---|---|---|---|---|
+| 56301 | OD | 2,48 | 82° | 82° | **83°** | 83° | 1° |
+| 56302 | OS | 2,09 | 111° | 111° | **110°** | 111° | ≤ 1° |
+| 27201 | OD | 1,69 | 87° | 90° | **88°** | 89° | ≤ 2° |
+| 27203 | OD | 1,65 | 89° | 91° | **89°** | 89° | ≤ 2° |
+| 27202 | OS | 0,80 | 84° | 85° | 88° | 88° | 3–4° |
+| 27204 | OS | 0,75 | 79° | 85° | 88° | 89° | 3–9° (TMS varia 6° entre SimK e Fourier) |
+
+Com astigmatismo ≥ 1,6 D a diferença fica dentro de 2° em 4 de 4 exames; espelhamento (180° − θ) ou rotação de
+90° dariam 97°/70°/92°/91° e 173°/20°/178°/179° — descartados. **Convenção angular fechada.**
+
+**Magnitude.** Cilindro refrativo calculado (n = 1,376, zona de 4 mm) / CYL ceratométrico do TMS (SimK, ≈ 3 mm):
+2,78/2,48 = 1,12; 2,47/2,09 = 1,18; 1,89/1,69 = 1,12; 1,91/1,65 = 1,16 — compatível com o fator 0,376/0,3375 = 1,114
+mais a diferença de zona. O "6mm Reg. Astig." do XREF é a *amplitude* de Fourier (≈ metade do cilindro).
+
+**Outros achados.**
+- Exame 56301: `PUP_1_56301.dat` com 256 zeros — o TMS não detectou a borda pupilar nessa captura. O programa
+  marcou a pupila como *ausente* e deixou os perfis pupilares **indisponíveis** com o motivo registrado; os perfis
+  de vértice saíram normalmente. (Primeiro caso real do terceiro estado da §7.)
+- Paciente B (56301/56302): 0 pontos interpolados, resíduo 0,22–0,28 µm, R 7,25/7,30 mm, Q −0,31/−0,28; SA 6 mm
+  +0,369/+0,341 µm; HOA RMS 0,46/0,41 µm.
+- Paciente C, 2 capturas por olho: SA 6 mm OD +0,249/+0,254, OS +0,339/+0,336 µm (Δ ≤ 0,005); trefoil 0,225/0,222
+  e 0,075/0,094; coma OD 0,300/0,265, OS 0,200/0,042 — coma volta a ser o termo instável entre capturas.
+- **Exportar duas vezes para a mesma pasta acumula pacientes**: o TmsSw acrescenta as linhas ao `XREF.dat`
+  existente (um cabeçalho, 6 linhas) e os arquivos `*_1_<exame>.dat` convivem. O programa agora deriva o código de
+  estudo do XREF (hash do nome/ID, sem armazenar o nome), conta capturas por paciente e olho, avisa na abertura e
+  põe o código no nome dos relatórios. O campo *File REF.* vale 1 em todas as linhas e o *ID* vem vazio — não servem
+  para separar pacientes.
+- Exportações repetidas do mesmo exame (4 subpastas, 33 arquivos cada) são **byte a byte idênticas** → a identidade
+  do cálculo (`analysis_id`) é a mesma, como exige a §4.
+
+## 5. Pendências
 
 - Confirmar modelo/versão do software na tela "Sobre" do TmsSw (o formato indica TMS-4/4N com cone de 25).
 - Olho de calibração (esfera de raio conhecido), se existir no fluxo da Tomey — teste de unidade mais limpo.
 - Comparador (Pentacam/OPD) do mesmo olho para o G3.
-- Repetibilidade: as 2 capturas por olho já mostram SA estável (Δ ≤ 0,02 µm) e coma variável (Δ até 0,15 µm);
+- Repetibilidade: as 2 capturas por olho mostram SA estável (Δ ≤ 0,02 µm) e coma variável (Δ até 0,16 µm);
   o piloto (§9) quantifica com 3 capturas e 20–30 participantes.

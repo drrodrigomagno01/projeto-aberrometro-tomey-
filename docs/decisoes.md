@@ -17,9 +17,12 @@
 | D13 | `analysis_id` = SHA-256 de hashes de entrada + configuração + versões; data separada; reprocessar gera nova análise | contador sequencial | plano §4 "Identidade do cálculo" |
 | D14 | JSON canônico com `null` para ausências; CSV e PDF derivados do mesmo objeto; mapas em NPZ separado | NaN em JSON | plano §4, §7 |
 | D15 | Exames sintéticos com manifesto `synthetic: true` e parâmetros de verdade; nunca misturados a dados reais | nenhum sintético | plano §2 |
-| D16 | Dados nominais **não entram** no pacote (XREFDAT ignorado; manifesto só com códigos) | importar índice de pacientes | LGPD / plano §13 |
+| D16 | Dados nominais **não entram** no pacote: do XREF.dat só se leem olho, data/hora, caminho nativo e índices numéricos | importar índice de pacientes | LGPD / plano §13 |
+| D19 | **Código de estudo = SHA-256 (8 hex) do nome/ID normalizados do XREF** (`P-XXXXXXXX`), calculado e descartado na leitura; sem XREF, hash do nome da pasta. Capturas contadas por paciente e olho; pasta com mais de um paciente gera aviso e os relatórios levam o código no nome | hash da pasta apenas (lumpava dois pacientes numa pasta exportada duas vezes); aleatório por sessão (não reprodutível) | observado em 18/10/2026: o TmsSw acrescenta linhas ao XREF.dat existente; o mesmo paciente em pastas diferentes precisa do mesmo código para o piloto. É pseudonimização, não anonimização (ver limitações) |
 | D17 | Teste de fumaça da interface headless (`--smoke`) no CI e no build Windows | só testes do núcleo | garante que o executável abre e exporta |
 | D18 | **Exigir ≥ 4 casas decimais** na exportação (achado do orçamento de erro) | aceitar 3 casas | viés sistemático de −0,035 µm na SA a 6 mm com 1 µm de quantização |
 
-Pendências abertas (fecham no G0/G1): orientação angular e espelhamento reais; semântica de RAD (plano × arco);
-referência de HIT; formato real de PUP; nomes de arquivo gerados pelo TMS; precisão máxima de exportação.
+Pendências fechadas no G0/G1 (`G0_resultado.md`): orientação angular e espelhamento (confirmados com astigmatismo
+de 1,7–2,5 D, Δ ≤ 2°); formato real de PUP (256 raios; 256 zeros = pupila não detectada); nomes de arquivo gerados
+pelo TMS; precisão de exportação (4 casas). Ainda presumidos: semântica exata de RAD (plano) e referência de HIT
+(plano apical) — coerentes com o ajuste cônico (R 7,25–7,62 mm, resíduo ≤ 0,36 µm) mas sem olho de calibração.

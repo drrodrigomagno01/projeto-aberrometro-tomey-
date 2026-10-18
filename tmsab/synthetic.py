@@ -187,12 +187,15 @@ def standard_cases() -> list[SyntheticSpec]:
 # Formato REAL do TMS-4N (perfil v1): HIT_1_<exame>.dat etc., 256 linhas x 34 colunas, XREF.dat
 # ---------------------------------------------------------------------------
 def write_export_folder_v1(specs: list[SyntheticSpec], out_dir: str, first_exam: int = 90001,
-                           patient_name: tuple[str, str] = ("SINTETICO", "PACIENTE")) -> str:
+                           patient_name: tuple[str, str] = ("SINTETICO", "PACIENTE"), append: bool = False,
+                           date_str: str = "17/06/2026") -> str:
     """Escreve uma pasta no formato observado na estação real (TmsSw, cone de 25 anéis):
     uma linha por ângulo (256), 34 colunas (anéis; as restantes zero), 4 casas decimais, negativo =
     interpolado, zero = ausente; PUP com 256 raios da borda pupilar; AVE com potência e diâmetro médios por
     anel; XREF.dat com cabeçalho de grupos, nome fictício (que o leitor deve ignorar), data/hora, olho e
-    caminho nativo. Devolve a pasta."""
+    caminho nativo. Com `append=True` reproduz o comportamento observado do TmsSw ao exportar de novo para
+    uma pasta que já tem XREF.dat: as linhas novas são acrescentadas ao índice existente (sem novo
+    cabeçalho) — é assim que dois pacientes acabam na mesma pasta. Devolve a pasta."""
     os.makedirs(out_dir, exist_ok=True)
     xref_rows = []
     for i, spec in enumerate(specs):
@@ -237,7 +240,7 @@ def write_export_folder_v1(specs: list[SyntheticSpec], out_dir: str, first_exam:
         hh = 9
         mm = 30 + i
         xref_rows.append(
-            f"1,{patient_name[0]} ,{patient_name[1]} ,0,,17/06/2026 {hh:02d}:{mm:02d}:00,{spec.eye},C:\\\\Tomey\\\\Tms\\\\NewExams\\\\{exam}.tms,"
+            f"1,{patient_name[0]} ,{patient_name[1]} ,0,,{date_str} {hh:02d}:{mm:02d}:00,{spec.eye},C:\\\\Tomey\\\\Tms\\\\NewExams\\\\{exam}.tms,"
             f"44.70,{(spec.axis_deg + 90) % 180:.0f},44.30,{spec.axis_deg % 180:.0f},44.20,165,{abs(spec.cyl_D):.2f},44.44,0.06,0.22,0.33,0.39,1.53,0.80,0.09,0.00,0.34,0.98,0.00,0.00,"
             f"44.54,0.20,57.30,0.16,172.84,0.13,44.45,0.21,57.61,0.24,166.56,0.15, 0.29, 0.31,{spec.Q:.2f}, 0.11, 0.89"
         )
@@ -246,6 +249,11 @@ def write_export_folder_v1(specs: list[SyntheticSpec], out_dir: str, first_exam:
                "SRI,SAI,CEI,SDP,DSI,OSI,CSI,KCI,IAI,AA,EDP,EDD,3mm Spherical Equ.,3mm Reg. Astig.,3mm Reg. Astig. Axis,3mm Asymmetry,"
                "3mm Asymmetry Axis,3mm Higher order irregularity,6mm Spherical Equ.,6mm Reg. Astig.,6mm Reg. Astig. Axis,6mm Asymmetry,"
                "6mm Asymmetry Axis,6mm Higher order irregularity,Es,Em,Q,E,p")
-    with open(os.path.join(out_dir, "XREF.dat"), "w", encoding="ascii", newline="") as fh:
-        fh.write("\r\n".join([header1, header2] + xref_rows) + "\r\n")
+    xref_path = os.path.join(out_dir, "XREF.dat")
+    if append and os.path.isfile(xref_path):
+        with open(xref_path, "a", encoding="ascii", newline="") as fh:
+            fh.write("\r\n".join(xref_rows) + "\r\n")
+    else:
+        with open(xref_path, "w", encoding="ascii", newline="") as fh:
+            fh.write("\r\n".join([header1, header2] + xref_rows) + "\r\n")
     return out_dir

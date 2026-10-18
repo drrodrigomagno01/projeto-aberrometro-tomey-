@@ -224,9 +224,19 @@ def export_pdf(exam: NormalizedExam, analysis: Analysis, path: str) -> str:
     return path
 
 
+def report_stem(analysis: Analysis) -> str:
+    """Nome-base dos relatórios: código de estudo (pseudônimo) + exame + olho + prefixo da identidade do cálculo.
+    Só caracteres seguros para nome de arquivo; nunca dados nominais."""
+    import re
+    ident = analysis.identity
+    parts = [ident.study_id if ident.study_id and ident.study_id != "sem_estudo" else "", ident.exam_id, ident.eye or "X", analysis.analysis_id[:8]]
+    stem = "_".join(p for p in parts if p)
+    return re.sub(r"[^A-Za-z0-9_.\-]+", "_", stem)
+
+
 def export_all(exam: NormalizedExam, analysis: Analysis, out_dir: str, stem: Optional[str] = None) -> dict[str, str]:
     os.makedirs(out_dir, exist_ok=True)
-    stem = stem or f"{analysis.identity.exam_id}_{analysis.identity.eye or 'X'}_{analysis.analysis_id[:8]}"
+    stem = stem or report_stem(analysis)
     paths = {
         "json": export_json(analysis, os.path.join(out_dir, stem + ".json")),
         "csv": export_csv(analysis, os.path.join(out_dir, stem + ".csv")),

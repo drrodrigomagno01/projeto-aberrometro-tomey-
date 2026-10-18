@@ -88,6 +88,9 @@ class PackageState:
         if self.exam is not None:
             cap = f" c{self.exam.identity.capture_index}" if self.exam.identity.capture_index else ""
             ident = f"{self.exam.identity.exam_id} {self.exam.identity.eye or '?'}{cap}"
+            sid = self.exam.identity.study_id
+            if sid and sid.startswith("P-") and not self.exam.bundle.synthetic:
+                ident += f" · {sid}"          # código pseudonimizado: distingue pacientes numa mesma pasta
         elif self.exam_id:
             ident = f"{self.exam_id}"
         else:
@@ -442,13 +445,26 @@ class MainWindow(QMainWindow):
             self._msg("Abrir pasta exportada", f"Não foi possível listar os exames: {e}", "warn")
             return []
         if not exams:
-            # pasta de pacote único (v0/sintético) ou pasta com subpastas
+            # pasta de pacote único (v0/sintético) ou pasta com subpastas (ex.: uma subpasta por exportação)
             if any(os.path.isdir(os.path.join(directory, n)) for n in os.listdir(directory)):
-                return self.load_folder(directory)
+                keys = self.load_folder(directory)
+                if keys and auto and self.auto_compute.isChecked():
+                    self.start_compute()
+                return keys
             return [self.load_package(directory)]
         keys = []
         for e in exams:
             keys.append(self.load_package(directory, exam_id=e["exam_id"]))
+        patients = sorted({e["patient_key"] for e in exams if e.get("patient_key")})
+        if len(patients) > 1:
+            self._msg(
+                "Pasta com mais de um paciente",
+                f"Esta pasta contém {len(exams)} exames de {len(patients)} pacientes diferentes (pelo XREF.dat).\n\n"
+                "Isso acontece quando se exporta de novo para uma pasta que já tinha uma exportação: o TMS acrescenta "
+                "as linhas ao XREF.dat existente.\n\nCada exame recebeu o código do seu paciente (P-…), visível na lista; "
+                "os relatórios levam esse código no nome. Para evitar confusão, use uma pasta nova por paciente.",
+                "warn",
+            )
         if auto and self.auto_compute.isChecked():
             self.start_compute()
         return keys
@@ -466,10 +482,19 @@ class MainWindow(QMainWindow):
             self.load_folder(d)
 
     def load_folder(self, folder: str) -> list[str]:
+        """Cada subpasta = uma exportação do TMS (vários exames) ou um pacote único; devolve todas as chaves."""
         keys = []
         for name in sorted(os.listdir(folder)):
             sub = os.path.join(folder, name)
-            if os.path.isdir(sub):
+            if not os.path.isdir(sub) or name.lower() == "analises":
+                continue
+            try:
+                found = list_exams(sub)
+            except Exception:  # noqa: BLE001
+                found = []
+            if len(found) > 1:
+                keys.extend(self.load_package(sub, exam_id=e["exam_id"]) for e in found)
+            else:
                 keys.append(self.load_package(sub))
         return keys
 
@@ -505,6 +530,7 @@ class MainWindow(QMainWindow):
             self.packages[key] = st
             item = QListWidgetItem(st.label)
             item.setData(Qt.UserRole, key)
+            item.setToolTip(directory)      # a pasta (que pode ter o nome do paciente) só aparece ao passar o mouse
             self.list.addItem(item)
             self.list.setCurrentItem(item)
         st.analysis = None; st.rec = None

@@ -97,7 +97,8 @@ def cmd_import(args):
             print(f"IMPORTAÇÃO INVÁLIDA ({exam_id or args.dir}): {e}")
             rc = 2
             continue
-        print(f"exame {exam.identity.exam_id} olho {exam.identity.eye} captura {exam.identity.capture_index} data {exam.identity.acquired_at} — perfil {exam.bundle.adapter_profile} (sintético: {exam.bundle.synthetic})")
+        print(f"exame {exam.identity.exam_id} olho {exam.identity.eye} captura {exam.identity.capture_index} data {exam.identity.acquired_at} "
+              f"código {exam.identity.study_id} — perfil {exam.bundle.adapter_profile} (sintético: {exam.bundle.synthetic})")
         for d in exam.diagnostics:
             print("  " + d)
         for w in exam.warnings:
@@ -110,13 +111,19 @@ def cmd_import(args):
 
 
 def _print_analysis(an):
-    print(f"análise {an.analysis_id} — exame {an.identity.exam_id} {an.identity.eye or ''} — R={an.geometry.conic_R_mm:.4f} mm Q={an.geometry.conic_Q:+.4f} resíduo={an.geometry.residual_rms_mm*1000:.3f} µm")
+    cap = f" c{an.identity.capture_index}" if an.identity.capture_index else ""
+    print(f"análise {an.analysis_id} — {an.identity.study_id} exame {an.identity.exam_id} {an.identity.eye or ''}{cap} — "
+          f"R={an.geometry.conic_R_mm:.4f} mm Q={an.geometry.conic_Q:+.4f} resíduo={an.geometry.residual_rms_mm*1000:.3f} µm")
     for w in an.wavefronts:
         if w.validity != "disponivel":
             print(f"  {w.profile.name}: {w.validity.upper()} — " + "; ".join(w.block_reasons))
             continue
         m = w.metrics
-        print(f"  {w.profile.name}: SA c40={m['sa_c40']:+.4f} µm | coma |{m['coma_magnitude']:.4f}| (c3-1 {m['coma_c3m1']:+.4f}, c31 {m['coma_c31']:+.4f}) | trefoil |{m['trefoil_magnitude']:.4f}| | HOA RMS={m['rms_hoa_n3plus']:.4f} µm | astig c22={m['astig_c22']:+.4f} c2-2={m['astig_c2m2']:+.4f}")
+        astig = ""
+        if m.get("cilindro_equivalente_D") is not None:
+            astig = (f" | cil {m['cilindro_equivalente_D']:+.2f} D eixo {m['eixo_equivalente_deg']:.0f}° "
+                     f"(meridiano mais curvo {(m['eixo_equivalente_deg'] - 90) % 180:.0f}°)")
+        print(f"  {w.profile.name}: SA c40={m['sa_c40']:+.4f} µm | coma |{m['coma_magnitude']:.4f}| (c3-1 {m['coma_c3m1']:+.4f}, c31 {m['coma_c31']:+.4f}) | trefoil |{m['trefoil_magnitude']:.4f}| | HOA RMS={m['rms_hoa_n3plus']:.4f} µm | astig c22={m['astig_c22']:+.4f} c2-2={m['astig_c2m2']:+.4f}{astig}")
 
 
 def cmd_analyze(args):

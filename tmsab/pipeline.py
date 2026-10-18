@@ -74,7 +74,9 @@ def compute_profile(exam: NormalizedExam, rec: ReconstructedSurface, profile: Op
     center = analysis_center(exam, profile)
     if center is None:
         return WavefrontResult(profile=profile, center_xy=(float("nan"), float("nan")), validity="indisponivel",
-                               block_reasons=["centro pupilar não registrado no exame"], support=None)
+                               block_reasons=["centro pupilar não registrado no exame"
+                                              + (f" — {exam.pupil.method}" if exam.pupil.state != "registrada" and exam.pupil.method not in (None, "", "desconhecido") else "")],
+                               support=None)
     cx, cy = center
     sup = support_metrics(exam.samples, rec, cx, cy, profile.radius_mm, edge_margin=qc.edge_margin)
     state, reasons = evaluate_profile_availability(profile, sup, rec, exam.pupil, qc, (cx, cy))

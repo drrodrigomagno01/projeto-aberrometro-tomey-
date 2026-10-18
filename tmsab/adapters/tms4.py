@@ -225,8 +225,13 @@ def read_pupil_radii(path: str, rule: dict[str, Any], n_angles: int, theta_deg: 
     if rule.get("negative_means_interpolated", True):
         r = np.abs(r)
     ok = np.isfinite(r) & (r > 0)
+    if ok.sum() == 0:
+        # observado em exame real: PUP com 256 zeros = o TMS não detectou a borda pupilar nessa captura
+        return PupilData(state="ausente", frame=rule.get("frame", "desconhecido"),
+                         method="PUP com todos os raios = 0 (TMS não detectou a borda pupilar nesta captura)")
     if ok.sum() < n_angles * 0.5:
-        return PupilData(state="ausente", frame=rule.get("frame", "desconhecido"), method="PUP com menos de 50% de pontos válidos")
+        return PupilData(state="ausente", frame=rule.get("frame", "desconhecido"),
+                         method=f"PUP com apenas {int(ok.sum())} de {n_angles} raios válidos (< 50%)")
     th = np.radians(theta_deg)
     x, y = r * np.cos(th), r * np.sin(th)
     # ajuste de círculo: x² + y² + D x + E y + F = 0
@@ -244,12 +249,33 @@ def read_pupil_radii(path: str, rule: dict[str, Any], n_angles: int, theta_deg: 
 
 
 XREF_EXCLUDED_COLUMNS = ("Last Name", "First Name", "ID", "-----")
+XREF_IDENTITY_COLUMNS = ("Last Name", "First Name", "ID")
+
+
+def _patient_key_from_row(row: dict[str, Any]) -> Optional[str]:
+    """Código de estudo pseudonimizado a partir das colunas de identificação do XREF.
+
+    Nome e ID são usados SOMENTE para calcular um SHA-256 (8 hex) e descartados em seguida — o código
+    é o mesmo para o mesmo paciente em qualquer pasta/exportação, e nenhum nome fica em estrutura alguma.
+    Normalização: maiúsculas, espaços internos colapsados, acentos preservados.
+    """
+    import hashlib
+    parts = []
+    for col in XREF_IDENTITY_COLUMNS:
+        v = row.get(col)
+        parts.append(" ".join(str(v if v is not None else "").upper().split()))
+    if not any(parts):
+        return None
+    return "P-" + hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:8].upper()
 
 
 def read_xref(path: str) -> dict[str, dict[str, Any]]:
-    """Lê o XREF.dat (ou xref_anon.csv) exportado pelo TMS e devolve {exame: {eye, acquired_at, indices}}.
+    """Lê o XREF.dat (ou xref_anon.csv) exportado pelo TMS e devolve
+    {exame: {eye, acquired_at, indices, patient_key, native_path_hint}}.
 
-    As colunas com identificação direta (nome, ID) NUNCA são lidas para a estrutura devolvida.
+    As colunas com identificação direta (nome, ID) NUNCA são copiadas para a estrutura devolvida: servem
+    apenas para derivar `patient_key` (hash), que separa pacientes quando uma pasta recebeu mais de uma
+    exportação (o TMS acrescenta linhas a um XREF.dat existente).
     """
     import csv
     with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
@@ -268,6 +294,7 @@ def read_xref(path: str) -> dict[str, dict[str, Any]]:
         if not m:
             continue
         exam = m.group(1)
+        patient_key = _patient_key_from_row(r)
         eye = (r.get("Eye") or "").strip().upper()
         eye = {"OE": "OS"}.get(eye, eye) if eye in ("OD", "OS", "OE") else None
         dt = (r.get("Date&Time") or "").strip()
@@ -284,8 +311,14 @@ def read_xref(path: str) -> dict[str, dict[str, Any]]:
                 indices[k.strip()] = float(str(v).strip())
             except (TypeError, ValueError):
                 pass
-        out[exam] = {"eye": eye, "acquired_at": acquired, "indices": indices, "native_path_hint": os.path.dirname(fn)}
+        out[exam] = {"eye": eye, "acquired_at": acquired, "indices": indices, "patient_key": patient_key,
+                     "native_path_hint": os.path.dirname(fn)}
     return out
+
+
+def patients_in_xref(xref: dict[str, dict[str, Any]]) -> list[str]:
+    """Códigos de paciente (pseudônimos) distintos presentes num índice lido por read_xref."""
+    return sorted({v["patient_key"] for v in xref.values() if v.get("patient_key")})
 
 
 def detect_profile(directory: str) -> str:
@@ -297,9 +330,11 @@ def detect_profile(directory: str) -> str:
 
 
 def list_exams(directory: str, profile: str | dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Lista os exames presentes numa pasta exportada do TMS (um paciente, vários exames/olhos/capturas).
+    """Lista os exames presentes numa pasta exportada do TMS (normalmente um paciente, vários exames/olhos/capturas).
 
-    Retorna dicionários {exam_id, eye, acquired_at, capture_index, files} ordenados por data/numero.
+    Retorna dicionários {exam_id, eye, acquired_at, capture_index, patient_key, files, indices} ordenados por
+    data/número. `patient_key` é o código pseudonimizado do XREF (None sem XREF); o número da captura conta
+    por paciente e olho, de modo que uma pasta com duas exportações (dois pacientes) não mistura as contagens.
     """
     prof_name = profile or detect_profile(directory)
     prof = load_profile(prof_name) if isinstance(prof_name, str) else prof_name
@@ -322,11 +357,11 @@ def list_exams(directory: str, profile: str | dict[str, Any] | None = None) -> l
     for exam, files in groups.items():
         info = xref.get(exam, {})
         exams.append({"exam_id": exam, "eye": info.get("eye"), "acquired_at": info.get("acquired_at"),
-                      "files": files, "indices": info.get("indices", {})})
+                      "patient_key": info.get("patient_key"), "files": files, "indices": info.get("indices", {})})
     exams.sort(key=lambda e: (e["acquired_at"] or "", int(e["exam_id"]) if e["exam_id"].isdigit() else 0))
-    counters: dict[str, int] = {}
+    counters: dict[tuple[str, str], int] = {}
     for e in exams:
-        k = e["eye"] or "?"
+        k = (e["patient_key"] or "", e["eye"] or "?")
         counters[k] = counters.get(k, 0) + 1
         e["capture_index"] = counters[k]
     return exams
@@ -432,6 +467,7 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] | None = Non
     # índice XREF (sem dados nominais)
     xref_info: dict[str, Any] = {}
     xref_path = None
+    xref_patients: list[str] = []
     for cand in (xref_name, "xref_anon.csv"):
         p = os.path.join(directory, cand)
         if os.path.isfile(p):
@@ -443,6 +479,7 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] | None = Non
             sel = exam_id or (next(iter(present_exams)) if len(present_exams) == 1 else None)
             if sel and sel in allx:
                 xref_info = allx[sel]
+            xref_patients = patients_in_xref({k: v for k, v in allx.items() if k in present_exams} or allx)
             break
 
     files: list[SourceFile] = []
@@ -610,8 +647,16 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] | None = Non
         # o XREF não traz modelo; o cone de 25 anéis e o formato identificam a família TMS-4/4N
         device.model = manifest.get("device", {}).get("model", "TMS-4N (presumido pelo formato)")
         device.cone = device.cone or f"{n_rings} anéis"
+    if manifest.get("study_id"):
+        study_id, study_source = str(manifest["study_id"]), "manifesto"
+    elif xref_info.get("patient_key"):
+        study_id, study_source = str(xref_info["patient_key"]), "XREF (hash do nome/ID; o nome não é armazenado)"
+    elif xref_info or exam_id:
+        study_id, study_source = _pseudonym(directory), "hash do nome da pasta"
+    else:
+        study_id, study_source = "sem_estudo", "nenhuma"
     identity = ExamIdentity(
-        study_id=str(manifest.get("study_id") or (_pseudonym(directory) if xref_info or exam_id else "sem_estudo")),
+        study_id=study_id,
         exam_id=str(exam_id_final),
         eye=eye,
         acquired_at=acquired,
@@ -622,6 +667,14 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] | None = Non
     if xref_info:
         export_settings["tms_indices"] = xref_info.get("indices", {})
         export_settings["tms_native_folder"] = xref_info.get("native_path_hint")
+    if xref_patients:
+        export_settings["patients_in_folder"] = len(xref_patients)
+        if len(xref_patients) > 1:
+            warnings.append(
+                f"a pasta contém exames de {len(xref_patients)} pacientes diferentes (XREF): este exame recebeu o código "
+                f"{study_id}; o TMS acrescenta linhas ao XREF.dat quando se exporta de novo para a mesma pasta — "
+                "recomenda-se uma pasta nova por paciente"
+            )
     bundle = SourceBundle(
         directory=os.path.abspath(directory), files=files, adapter_profile=prof["profile_id"],
         adapter_version=prof.get("adapter_version", "0"), export_settings=export_settings,
@@ -641,6 +694,7 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] | None = Non
             f"SimK2 {ix.get('SimK2', float('nan')):.2f} D @ {ix.get('SimK2 Ang.', float('nan')):.0f}°, CYL {ix.get('CYL', float('nan')):.2f} D, "
             f"SRI {ix.get('SRI', float('nan')):.2f}, SAI {ix.get('SAI', float('nan')):.2f}, Q {ix.get('Q', float('nan')):+.2f}"
         )
+    diagnostics.append(f"código de estudo {study_id} — origem: {study_source}")
     diagnostics.append(f"tabelas: {', '.join(f'{k} ({orientations[k]})' for k in fields)}; anéis={n_rings}, ângulos={n_angles}")
     diagnostics.append(f"pontos medidos {int(meas.sum())}, interpolados {int((st == PointState.INTERPOLATED).sum())}, ausentes {int((st == PointState.MISSING).sum())}")
     diagnostics.append(f"pupila: {pupil.state}" + (f" centro ({pupil.center_x:+.2f}, {pupil.center_y:+.2f}) mm, referencial {pupil.frame}" if pupil.state == "registrada" else ""))

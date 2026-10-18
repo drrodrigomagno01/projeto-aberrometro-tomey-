@@ -38,5 +38,9 @@ versões.
 
 ## Dados pessoais
 
-Dados nominais não entram no pacote nem nos logs; o programa usa códigos de estudo; a chave de pseudonimização
-fica na clínica. Dados reais só entram em desenvolvimento assistido por IA nos ambientes e condições aprovados.
+Dados nominais não entram nos relatórios, no JSON/CSV nem nos logs; o programa usa códigos de estudo. O código é um
+hash do nome/ID presente no `XREF.dat` (calculado na leitura e descartado) — isso é **pseudonimização, não
+anonimização**: quem tem a lista de pacientes da clínica pode recompor a correspondência, portanto a pasta
+exportada e a subpasta `analises/` continuam sendo dados pessoais sob a LGPD e devem ficar no ambiente da clínica.
+O próprio `XREF.dat` exportado pelo TMS contém o nome: não o copie para fora da estação. Dados reais só entram em
+desenvolvimento assistido por IA nos ambientes e condições aprovados.
