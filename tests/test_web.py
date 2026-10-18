@@ -3,6 +3,8 @@ import json
 import os
 import re
 
+import numpy as np
+
 import pytest
 
 from tmsab.synthetic import SyntheticSpec, write_export_folder_v1
@@ -61,3 +63,32 @@ def test_build_html(tmp_path):
     assert not re.search(r"\{\{[A-Z_]+\}\}", txt)
     assert "cdn.jsdelivr.net/pyodide/v" in txt and "setupEngine" in txt and "tmsab.web" in txt
     assert os.path.getsize(path) < 2_000_000
+
+
+def test_resultado_completo_figure_and_html(export_dir, tmp_path):
+    """Página única: 4 mapas topográficos + frente de onda + tabelas; entra como 1ª página do PDF e 1ª figura do HTML."""
+    from pypdf import PdfReader
+    from tmsab.adapters import import_tms_bundle
+    from tmsab.pipeline import analyze_exam
+    from tmsab.plots import best_fit_sphere, figure_resultado_completo, hoa_map
+    from tmsab.reporting import export_pdf
+    ex = import_tms_bundle(export_dir, exam_id="90001")
+    an, _ = analyze_exam(ex, with_maps=True)
+    fig = figure_resultado_completo(ex, an)
+    titles = [a.get_title() for a in fig.axes if a.get_title()]
+    assert any("axial" in t for t in titles) and any("tangencial" in t for t in titles) and any("refrativa" in t for t in titles)
+    assert any("Elevação" in t for t in titles) and any("Alta ordem" in t for t in titles) and any("Zernike" in t for t in titles)
+    assert abs(fig.get_size_inches()[0] - 8.27) < 0.01 and abs(fig.get_size_inches()[1] - 11.69) < 0.01
+    # esfera de melhor ajuste de uma esfera exata recupera o raio
+    t = np.linspace(0, 2 * np.pi, 200); r = np.linspace(0.3, 4.0, 15)[:, None]
+    x, y = r * np.cos(t)[None, :], r * np.sin(t)[None, :]
+    z = 7.8 - np.sqrt(7.8**2 - x**2 - y**2)
+    a, b, c, R = best_fit_sphere(x, y, z)
+    assert abs(R - 7.8) < 1e-6 and abs(a) < 1e-6 and abs(b) < 1e-6 and abs(c - 7.8) < 1e-6
+    wf = next(w for w in an.wavefronts if w.profile.name == "anterior_v1_vertice_6mm")
+    Z = hoa_map(wf, n=41)
+    assert Z.shape == (41, 41) and np.isfinite(Z[20, 20]) and np.isnan(Z[0, 0])
+    pdf = export_pdf(ex, an, str(tmp_path / "r.pdf"))
+    assert len(PdfReader(pdf).pages) >= 4
+    r = analyze_exam_html(export_dir, "90001", {"pdf": False})
+    assert "<figure class='completo'>" in r["html"] and r["html"].index("completo") < r["html"].index("class='detalhes'")

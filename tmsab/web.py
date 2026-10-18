@@ -25,7 +25,7 @@ from . import CORE_VERSION
 from .adapters import AdapterError, import_tms_bundle, list_exams
 from .model import Analysis, NormalizedExam, QualityConfig, ReconstructionConfig
 from .pipeline import analyze_exam, default_profiles
-from .plots import plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
+from .plots import figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
 from .reporting import canonical_result, export_csv, export_json, export_pdf, report_lines, report_stem
 
 matplotlib.use("Agg")
@@ -151,6 +151,14 @@ def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True) -> s
     )
     metrics = "<section><h3>Resultados por perfil</h3>" + _metrics_table(an) + "</section>"
 
+    completo = ""
+    if with_maps:
+        try:
+            completo = (f"<figure class='completo'><img src='{_png(figure_resultado_completo(exam, an), dpi=150)}' "
+                        "alt='resultado completo (uma página)'></figure>")
+        except Exception as e:  # noqa: BLE001
+            completo = f"<p class='aviso'>Página de resultado completo indisponível: {_e(e)}</p>"
+
     figs = ""
     if with_maps:
         fig = Figure(figsize=(9, 4.2))
@@ -193,7 +201,8 @@ def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True) -> s
     )
     full_text = "<details class='texto'><summary>Relatório em texto (idêntico ao PDF)</summary><pre>" + _e("\n".join(report_lines(an))) + "</pre></details>"
     return (f"<article class='exame' data-exam='{_e(ident.exam_id)}' data-eye='{_e(ident.eye or '')}'>"
-            + head + metrics + geo + figs + qual + full_text + f"<p class='rodape'>{_e(DISCLAIMER)}</p></article>")
+            + head + completo + "<div class='detalhes'>" + metrics + geo + figs + qual + full_text
+            + f"<p class='rodape'>{_e(DISCLAIMER)}</p></div></article>")
 
 
 def report_document(articles: list[str], title: str = "Aberrometria corneana anterior calculada — relatório de pesquisa") -> str:
@@ -222,6 +231,8 @@ table.metricas td:first-child { text-align: left; }
 .figuras { display: flex; flex-wrap: wrap; gap: 10px; }
 figure { margin: 6px 0; }
 figure img { max-width: 100%; height: auto; border: 1px solid #eee; }
+figure.completo { margin: 8px 0 12px; text-align: center; }
+figure.completo img { max-width: 100%; width: 900px; border: 1px solid #ccd; }
 figure.geo img { max-width: 720px; }
 figure.perfil img { max-width: 720px; }
 figcaption { font-size: 11px; color: #444; }
@@ -232,12 +243,16 @@ li.aviso { color: #8a6d00; }
 details.texto pre { font-size: 10.5px; white-space: pre-wrap; background: #f7f7f9; padding: 8px; border: 1px solid #e3e3e8; }
 .rodape { font-size: 10.5px; color: #555; border-top: 1px solid #dde; padding-top: 6px; margin-top: 10px; }
 @media print {
-  @page { size: A4; margin: 12mm; }
+  @page { size: A4; margin: 10mm; }
   body { background: #fff; }
   .relatorio { max-width: none; padding: 0; font-size: 11px; }
   .exame { border: none; padding: 0; margin: 0; page-break-after: always; break-after: page; }
   .exame:last-child { page-break-after: auto; break-after: auto; }
   figure { break-inside: avoid; page-break-inside: avoid; }
+  figure.completo { margin: 0; page-break-after: always; break-after: page; }
+  figure.completo img { width: auto; max-width: 186mm; max-height: 268mm; border: none; }
+  body.so-completo .detalhes, body.so-completo h1, body.so-completo article.exame > header { display: none !important; }
+  body.so-completo figure.completo { page-break-after: always; }
   figure.geo img { max-width: 170mm; }
   figure.perfil img { max-width: 170mm; }
   details.texto { display: none; }

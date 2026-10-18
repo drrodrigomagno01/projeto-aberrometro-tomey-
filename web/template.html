@@ -65,7 +65,8 @@ table.exames th { background:#eef1f7; }
     <div class="row" style="justify-content:space-between">
       <b>Exames encontrados</b>
       <span>
-        <button id="btnPrint" class="primary" disabled>Imprimir relatório (todos os exames)</button>
+        <button id="btnPrintCompleto" class="primary" disabled>Imprimir resultado completo (1 página por exame)</button>
+        <button id="btnPrint" disabled>Imprimir relatório detalhado</button>
         <button id="btnSaveHtml" disabled>Salvar relatório (.html)</button>
       </span>
     </div>
@@ -165,7 +166,7 @@ function onEngineMessage(m) {
   if (m.type === "status") { setStatus(m.text); return; }
   if (m.type === "progress") { setStatus("calculando… " + m.text); return; }
   if (m.type === "fatal") { setStatus("Falha ao carregar o motor: " + m.text + " — verifique a conexão com a internet (o motor é baixado de cdn.jsdelivr.net na primeira vez).", "err"); engineEl.textContent = "motor: indisponível"; return; }
-  if (m.type === "ready") { engineReady = true; engineEl.textContent = "motor: pronto (tmsab " + m.version + ")"; setStatus("Pronto. Escolha a pasta exportada do TMS (Ferramentas → Tabelas de Dados)."); $("btnFolder").disabled = false; $("btnFiles").disabled = false; return; }
+  if (m.type === "ready") { engineReady = true; engineEl.textContent = "motor: pronto (tmsab " + m.version + ")"; setStatus("Pronto. Escolha a pasta exportada do TMS (Ferramentas → Tabelas de Dados); ao terminar, use \"Imprimir resultado completo\" (1 página A4 por exame)."); $("btnFolder").disabled = false; $("btnFiles").disabled = false; return; }
   if (m.type === "listed") { onListed(m); return; }
   if (m.type === "error") { setStatus("Erro na pasta " + m.dir + ": " + m.text, "err"); busy = false; next(); return; }
   if (m.type === "result") { onResult(m); return; }
@@ -321,10 +322,11 @@ function onResult(m) {
   tb.appendChild(dlButton("Baixar JSON", r.json, "application/json", r.stem + ".json"));
   tb.appendChild(dlButton("Baixar CSV", r.csv, "text/csv", r.stem + ".csv"));
   if (r.pdf_b64) tb.appendChild(dlButton("Baixar PDF (idêntico ao programa)", b64ToBytes(r.pdf_b64), "application/pdf", r.stem + ".pdf"));
-  const bp = document.createElement("button"); bp.textContent = "Imprimir só este exame"; bp.onclick = () => printOnly(art); tb.appendChild(bp);
+  const bc = document.createElement("button"); bc.textContent = "Imprimir resultado completo (1 página)"; bc.onclick = () => printOnly(art, true); tb.appendChild(bc);
+  const bp = document.createElement("button"); bp.textContent = "Imprimir relatório detalhado deste exame"; bp.onclick = () => printOnly(art, false); tb.appendChild(bp);
   art.insertBefore(tb, art.firstChild);
   $("report").appendChild(art);
-  $("btnPrint").disabled = false; $("btnSaveHtml").disabled = false;
+  $("btnPrint").disabled = false; $("btnSaveHtml").disabled = false; $("btnPrintCompleto").disabled = false;
   setStatus("Exame " + r.exam_id + " " + (r.eye || "") + " calculado (análise " + r.analysis_id.slice(0, 8) + "…).");
   next();
 }
@@ -338,12 +340,19 @@ function dlButton(label, data, mime, filename) {
 function openDetailsForPrint(open) { document.querySelectorAll("details.zern").forEach((d) => { if (open) { d.dataset.was = d.open ? "1" : "0"; d.open = true; } else if (d.dataset.was === "0") d.open = false; }); }
 window.addEventListener("beforeprint", () => openDetailsForPrint(true));
 window.addEventListener("afterprint", () => openDetailsForPrint(false));
-$("btnPrint").onclick = () => { document.querySelectorAll("article.exame").forEach((a) => (a.style.display = "")); window.print(); };
-function printOnly(art) {
+function printMode(onlyCompleto) {
+  document.body.classList.toggle("so-completo", !!onlyCompleto);
+  const restore = () => { document.body.classList.remove("so-completo"); window.removeEventListener("afterprint", restore); };
+  window.addEventListener("afterprint", restore);
+}
+$("btnPrint").onclick = () => { document.querySelectorAll("article.exame").forEach((a) => (a.style.display = "")); printMode(false); window.print(); };
+$("btnPrintCompleto").onclick = () => { document.querySelectorAll("article.exame").forEach((a) => (a.style.display = "")); printMode(true); window.print(); };
+function printOnly(art, onlyCompleto) {
   const all = Array.from(document.querySelectorAll("article.exame"));
   all.forEach((a) => (a.style.display = a === art ? "" : "none"));
   const restore = () => { all.forEach((a) => (a.style.display = "")); window.removeEventListener("afterprint", restore); };
   window.addEventListener("afterprint", restore);
+  printMode(onlyCompleto);
   window.print();
 }
 $("btnSaveHtml").onclick = () => {

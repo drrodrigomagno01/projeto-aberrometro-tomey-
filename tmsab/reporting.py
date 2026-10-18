@@ -19,7 +19,7 @@ from matplotlib.figure import Figure
 
 from . import CORE_VERSION
 from .model import Analysis, NormalizedExam, WavefrontResult, to_jsonable
-from .plots import plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
+from .plots import figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +188,11 @@ def _f2(v) -> str:
 def export_pdf(exam: NormalizedExam, analysis: Analysis, path: str) -> str:
     with PdfPages(path) as pdf:
         title = f"Aberrometria corneana anterior calculada — relatório de pesquisa (tmsab {CORE_VERSION})"
+        # página 1: resultado completo (topografia + frente de onda + tabelas) — pronta para impressão
+        try:
+            pdf.savefig(figure_resultado_completo(exam, analysis))
+        except Exception as e:  # noqa: BLE001 — a página-resumo nunca impede o relatório completo
+            pdf.savefig(_text_page([f"Página de resultado completo indisponível: {e}"], title))
         lines = _wrap(report_lines(analysis))
         # paginação simples
         per_page = 50

@@ -50,7 +50,7 @@ from .. import __version__
 from ..adapters import AdapterError, detect_profile, import_tms_bundle, list_exams
 from ..model import Analysis, NormalizedExam, OpticalProfile, QualityConfig, ReconstructionConfig, WavefrontResult
 from ..pipeline import default_profiles
-from ..plots import compare_scale, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
+from ..plots import compare_scale, figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
 from ..reporting import export_all, report_lines
 from .canvas import MplCanvas
 from .compute import profile_settings_diff, run_analysis
@@ -263,6 +263,7 @@ class MainWindow(QMainWindow):
 
     def _build_tabs(self) -> QWidget:
         self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_summary_tab(), "Resultado completo")
         self.tabs.addTab(self._build_import_tab(), "Importação")
         self.tabs.addTab(self._build_geometry_tab(), "Geometria")
         self.tabs.addTab(self._build_wavefront_tab(), "Frente de onda")
@@ -392,6 +393,81 @@ class MainWindow(QMainWindow):
         self.cmp_table.setMaximumHeight(220)
         lay.addWidget(self.cmp_table)
         return w
+
+    def _build_summary_tab(self) -> QWidget:
+        """Página única (A4) com topografia, frente de onda, Zernike e tabelas — pronta para imprimir."""
+        w = QWidget(); lay = QVBoxLayout(w)
+        row = QHBoxLayout()
+        self.btn_print_summary = QPushButton("Imprimir resultado completo…"); self.btn_print_summary.clicked.connect(self.print_summary)
+        self.btn_save_summary = QPushButton("Salvar esta página (PDF/PNG)…"); self.btn_save_summary.clicked.connect(self.save_summary)
+        self.btn_print_summary.setEnabled(False); self.btn_save_summary.setEnabled(False)
+        row.addWidget(self.btn_print_summary); row.addWidget(self.btn_save_summary)
+        self.summary_hint = QLabel("A mesma página é a 1ª do PDF salvo em <pasta>/analises.")
+        self.summary_hint.setStyleSheet("color:#555;")
+        row.addWidget(self.summary_hint, 1)
+        lay.addLayout(row)
+        scroll = QScrollArea(); scroll.setWidgetResizable(False); scroll.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.cv_summary = MplCanvas(width=8.27, height=11.69, dpi=88, toolbar=False)
+        self.cv_summary.setFixedSize(int(8.27 * 88) + 2, int(11.69 * 88) + 2)   # tamanho da página; rolagem no restante
+        scroll.setWidget(self.cv_summary)
+        lay.addWidget(scroll, 1)
+        return w
+
+    def fill_summary_tab(self, st: PackageState) -> None:
+        ok = st.analysis is not None and st.exam is not None
+        self.btn_print_summary.setEnabled(ok); self.btn_save_summary.setEnabled(ok)
+        if not ok:
+            self.cv_summary.clear("Calcule o exame para ver o resultado completo (topografia + frente de onda + tabelas).")
+            return
+        try:
+            figure_resultado_completo(st.exam, st.analysis, fig=self.cv_summary.figure)
+            self.cv_summary.canvas.draw_idle()
+        except Exception as e:  # noqa: BLE001
+            self.cv_summary.clear(f"Não foi possível montar a página: {type(e).__name__}: {e}")
+
+    @Slot()
+    def print_summary(self):
+        st = self.selected_state()
+        if st is None or st.analysis is None or st.exam is None:
+            return
+        try:
+            from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPainter
+            from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+        except Exception as e:  # noqa: BLE001
+            self._msg("Imprimir", f"Impressão indisponível neste sistema: {e}", "warn"); return
+        printer = QPrinter(QPrinter.HighResolution)
+        printer.setPageSize(QPageSize(QPageSize.A4)); printer.setPageOrientation(QPageLayout.Portrait)
+        printer.setDocName(f"resultado_completo_{st.analysis.identity.exam_id}_{st.analysis.identity.eye or 'X'}")
+        if self.interactive:
+            dlg = QPrintDialog(printer, self); dlg.setWindowTitle("Imprimir resultado completo")
+            if dlg.exec() != QPrintDialog.Accepted:
+                return
+        import io
+        fig = figure_resultado_completo(st.exam, st.analysis)
+        buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=220)
+        img = QImage.fromData(buf.getvalue())
+        painter = QPainter(printer)
+        rect = painter.viewport(); size = img.size(); size.scale(rect.size(), Qt.KeepAspectRatio)
+        painter.setViewport(rect.x(), rect.y(), size.width(), size.height()); painter.setWindow(img.rect())
+        painter.drawImage(0, 0, img); painter.end()
+        self.statusBar().showMessage("Resultado completo enviado para a impressora.", 8000)
+
+    @Slot()
+    def save_summary(self):
+        st = self.selected_state()
+        if st is None or st.analysis is None or st.exam is None:
+            return
+        stem = f"resultado_completo_{st.analysis.identity.study_id}_{st.analysis.identity.exam_id}_{st.analysis.identity.eye or 'X'}"
+        if self.interactive:
+            path, _ = QFileDialog.getSaveFileName(self, "Salvar resultado completo", stem + ".pdf", "PDF (*.pdf);;PNG (*.png)")
+            if not path:
+                return
+        else:
+            path = os.path.join(tempfile.mkdtemp(prefix="tmsab_"), stem + ".pdf")
+        fig = figure_resultado_completo(st.exam, st.analysis)
+        fig.savefig(path, dpi=200)
+        self.statusBar().showMessage(f"Resultado completo salvo em {path}", 10000)
+        return path
 
     def _build_technical_tab(self) -> QWidget:
         self.tech_text = QPlainTextEdit(); self.tech_text.setReadOnly(True)
@@ -751,6 +827,7 @@ class MainWindow(QMainWindow):
         self.z_table.setRowCount(0)
 
     def refresh_all_tabs(self, st: PackageState) -> None:
+        self.fill_summary_tab(st)
         self.fill_import_tab(st)
         self.fill_geometry_tab(st)
         self.fill_wavefront_tab(st)

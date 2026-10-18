@@ -8,7 +8,7 @@ versões usadas, com controle de qualidade e proveniência.
 
 Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/2026): seções 1–15 e apêndices.
 
-> **Estado: versão de pesquisa 0.2.2.** O formato real das Data Tables do TMS-4N foi verificado com exames
+> **Estado: versão de pesquisa 0.3.0.** O formato real das Data Tables do TMS-4N foi verificado com exames
 > reais de 3 pacientes (perfil `tms4_datatables_v1`; orientação angular confirmada com astigmatismo de até 2,5 D;
 > marcos G0/G1 fechados — `docs/G0_resultado.md`). Nada aqui é alegação
 > diagnóstica, seleção de LIO ou planejamento terapêutico. Ver `docs/limitacoes.md`.
@@ -21,8 +21,8 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 | §4 Contrato de dados, máscaras, identidade do cálculo por hash | Implementado |
 | §5 Reconstrução (cônica + Zernike ordem 10, ou RBF/spline), traçado de raios, OPD, Zernike OSA ordem 6 | Implementado e verificado contra soluções analíticas |
 | §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows/macOS + versão HTML (Pyodide) | Implementado |
-| §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) | Implementado |
-| §8 Suíte de verificação (66 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
+| §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) + **página "Resultado completo"** (topografia axial/tangencial/refrativa/elevação + frente de onda + Zernike + tabelas, 1 folha A4) | Implementado |
+| §8 Suíte de verificação (67 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
 | §9 Estatística do piloto (repetibilidade, Bland–Altman com observações repetidas) + protocolo | Implementado (`tmsab stats`) |
 | §0 Inventário da estação / G0–G1 | **Fechados em 18/10/2026** com 14 exames reais de 3 pacientes — `docs/G0_resultado.md` (pendentes: tela "Sobre", olho de calibração, comparador) |
 | §9 Piloto com participantes e comparador | **Depende de dados reais** — `docs/protocolo_piloto.md` |
@@ -54,8 +54,8 @@ Apple, então na primeira abertura o macOS bloqueia: vá em *Ajustes do Sistema 
 dentro do navegador via Pyodide/WebAssembly — **sem servidor, sem banco de dados, nenhum dado sai do computador**.
 Na primeira abertura o navegador baixa o motor (~35 MB de cdn.jsdelivr.net; fica em cache). Uso: abrir o .html →
 *Escolher pasta exportada do TMS* (o navegador pergunta se pode "carregar" os arquivos: é leitura local) → os exames
-são calculados um a um (~10 s cada) → **Imprimir relatório** (⌘P/Ctrl+P → impressora ou PDF), *Salvar relatório
-(.html)* ou baixar JSON/CSV/PDF por exame. Os números são idênticos aos do programa de computador (mesmo código;
+são calculados um a um (~10 s cada) → **Imprimir resultado completo** (1 página A4 por exame: topografia + frente de
+onda + tabelas) ou *Imprimir relatório detalhado*, *Salvar relatório (.html)*, ou baixar JSON/CSV/PDF por exame. Os números são idênticos aos do programa de computador (mesmo código;
 verificado a 12 casas decimais). Pastas com subpastas (uma por exportação) e pastas com dois pacientes são tratadas
 como no programa.
 
@@ -77,7 +77,11 @@ pytest                    # suíte de verificação
    identifica cada exame (olho, data/hora e número da captura pelo XREF), **calcula automaticamente** os perfis
    padrão (vértice e pupila, 4 e 6 mm, Zernike ordem 6) e **salva JSON + CSV + PDF em `<pasta>/analises/`**.
    (As duas automações podem ser desligadas nas caixas do painel esquerdo.)
-3. Navegue pelas abas: *Importação* (diagnóstico, SimK/índices do TMS), *Geometria*, *Frente de onda*,
+3. A aba **Resultado completo** mostra, numa folha A4, os 4 mapas topográficos (potência axial, tangencial,
+   refrativa e elevação vs. esfera de melhor ajuste, com círculos de 3/6 mm e a pupila), a frente de onda total e de
+   alta ordem, os coeficientes de Zernike e as tabelas (geometria, astigmatismo, perfis, índices do TMS) —
+   **Imprimir resultado completo…** manda direto para a impressora; a mesma página é a 1ª do PDF em `analises/`.
+   As demais abas detalham: *Importação* (diagnóstico, SimK/índices do TMS), *Geometria*, *Frente de onda*,
    *Zernike*, *Comparação* (ex.: as duas capturas do mesmo olho), *Técnico*.
 
 Linha de comando: `tmsab analyze "D:\TMS\<paciente>"` faz o mesmo (relatórios em `analises/`);
@@ -97,7 +101,7 @@ sintéticos (perfil v0) — e `tmsab.synthetic.write_export_folder_v1` gera past
 
 ```bash
 tmsab verify          # oval de Descartes (W≡0), esfera vs Seidel, traçado 3D vs referência meridional, sintéticos
-pytest -q             # 66 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
+pytest -q             # 67 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
 ```
 
 Resultados registrados: esfera R=7,8 mm → c(4,0)=+0,0204 µm a 3 mm (Seidel +0,0197); elipsoide Q=−1/n² →

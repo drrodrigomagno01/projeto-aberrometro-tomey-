@@ -65,6 +65,11 @@ def run_smoke(app: QApplication, win, synth_dir: str | None, screenshot: str | N
         paths = win.export_package(st0, out)
         for p in paths.values():
             assert os.path.isfile(p) and os.path.getsize(p) > 0, f"exportação vazia: {p}"
+        # página "Resultado completo": canvas preenchido e salvamento em PDF
+        win.list.setCurrentRow(0); app.processEvents()
+        assert len(win.cv_summary.figure.axes) >= 6, "página de resultado completo não montada"
+        sp = win.save_summary()
+        assert sp and os.path.isfile(sp) and os.path.getsize(sp) > 10_000, "resultado completo não salvo"
         # parâmetros alterados -> desatualizado, sem números antigos
         win.order_spin.setValue(7)
         app.processEvents()

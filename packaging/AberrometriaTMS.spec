@@ -16,7 +16,7 @@ datas += collect_data_files("matplotlib", includes=["mpl-data/**"])
 
 hiddenimports = (
     ["matplotlib.backends.backend_qtagg", "matplotlib.backends.backend_pdf", "matplotlib.backends.backend_agg",
-     "scipy.special._cdflib", "scipy._lib.messagestream", "PySide6.QtSvg"]
+     "scipy.special._cdflib", "scipy._lib.messagestream", "PySide6.QtSvg", "PySide6.QtPrintSupport"]
     + collect_submodules("tmsab")
     + collect_submodules("scipy.interpolate")
     + collect_submodules("scipy.optimize")

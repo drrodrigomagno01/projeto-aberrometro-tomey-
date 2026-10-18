@@ -4,7 +4,7 @@ Ferramenta de pesquisa. Não realiza aquisição, não controla o instrumento e 
 emite alegações diagnósticas. Ver docs/limitacoes.md.
 """
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 CORE_VERSION = __version__
 
 def utf8_console() -> None:
