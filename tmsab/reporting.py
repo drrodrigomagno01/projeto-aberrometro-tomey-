@@ -185,12 +185,14 @@ def _f2(v) -> str:
     return "—" if v is None or not np.isfinite(v) else f"{v:+.2f}"
 
 
-def export_pdf(exam: NormalizedExam, analysis: Analysis, path: str) -> str:
+def export_pdf(exam: NormalizedExam, analysis: Analysis, path: str, patient_name: Optional[str] = None) -> str:
+    """PDF: página 1 = resultado completo (com nome do paciente e data, se `patient_name` for dado — opção do usuário);
+    demais páginas = relatório técnico só com o código do estudo."""
     with PdfPages(path) as pdf:
         title = f"Aberrometria corneana anterior calculada — relatório de pesquisa (tmsab {CORE_VERSION})"
         # página 1: resultado completo (topografia + frente de onda + tabelas) — pronta para impressão
         try:
-            pdf.savefig(figure_resultado_completo(exam, analysis))
+            pdf.savefig(figure_resultado_completo(exam, analysis, patient_name=patient_name))
         except Exception as e:  # noqa: BLE001 — a página-resumo nunca impede o relatório completo
             pdf.savefig(_text_page([f"Página de resultado completo indisponível: {e}"], title))
         lines = _wrap(report_lines(analysis))
@@ -239,13 +241,15 @@ def report_stem(analysis: Analysis) -> str:
     return re.sub(r"[^A-Za-z0-9_.\-]+", "_", stem)
 
 
-def export_all(exam: NormalizedExam, analysis: Analysis, out_dir: str, stem: Optional[str] = None) -> dict[str, str]:
+def export_all(exam: NormalizedExam, analysis: Analysis, out_dir: str, stem: Optional[str] = None,
+               patient_name: Optional[str] = None) -> dict[str, str]:
+    """JSON e CSV nunca levam o nome; o PDF leva-o apenas na página 1 quando `patient_name` é informado."""
     os.makedirs(out_dir, exist_ok=True)
     stem = stem or report_stem(analysis)
     paths = {
         "json": export_json(analysis, os.path.join(out_dir, stem + ".json")),
         "csv": export_csv(analysis, os.path.join(out_dir, stem + ".csv")),
-        "pdf": export_pdf(exam, analysis, os.path.join(out_dir, stem + ".pdf")),
+        "pdf": export_pdf(exam, analysis, os.path.join(out_dir, stem + ".pdf"), patient_name=patient_name),
     }
     if any(w.map_grid is not None for w in analysis.wavefronts):
         paths["npz"] = export_maps_npz(analysis, os.path.join(out_dir, stem + "_mapas.npz"))

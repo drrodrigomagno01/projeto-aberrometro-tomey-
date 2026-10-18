@@ -129,7 +129,7 @@ def _print_analysis(an):
 def cmd_analyze(args):
     """Analisa uma pasta exportada do TMS (todos os exames) ou um pacote único; relatórios em --out
     (padrão: <pasta>/analises)."""
-    from .adapters import AdapterError, import_tms_bundle
+    from .adapters import AdapterError, import_tms_bundle, patient_display_name
     from .pipeline import analyze_exam
     from .reporting import export_all
     t0 = time.time()
@@ -144,7 +144,8 @@ def cmd_analyze(args):
             continue
         an, _ = analyze_exam(exam, _profiles_from_args(args), _recon_from_args(args), with_maps=not args.no_pdf)
         _print_analysis(an)
-        paths = export_all(exam, an, out)
+        name = None if (args.sem_nome or exam.bundle.synthetic) else patient_display_name(args.dir, an.identity.exam_id)
+        paths = export_all(exam, an, out, patient_name=name)
         for k, p in paths.items():
             print(f"  {k}: {p}")
     print(f"tempo total {time.time()-t0:.1f} s")
@@ -289,8 +290,10 @@ def cmd_audit(args):
           f"(PDF {'lidos' if res['pdf_checked'] else 'NÃO lidos — instale pypdf'}) | ocorrências: {res['n_hits']}")
     for f in res["files_with_hits"]:
         print(f"  NOME ENCONTRADO em {f}")
+    if res.get("n_hits_pagina_completa"):
+        print(f"  (nome presente na 1ª página de {res['n_hits_pagina_completa']} PDF(s) — página de resultado completo, por opção do usuário; permitido)")
     if res["n_hits"] == 0:
-        print("OK — nenhum nome do XREF aparece nos relatórios.")
+        print("OK — nenhum nome do XREF aparece em JSON/CSV nem nas páginas técnicas dos PDFs.")
     return 0 if res["n_hits"] == 0 else 3
 
 
@@ -338,6 +341,7 @@ def build_parser():
     s.set_defaults(func=cmd_import)
 
     s = sub.add_parser("analyze", help="analisa uma pasta exportada do TMS (todos os exames) e salva relatórios")
+    s.add_argument("--sem-nome", action="store_true", help="não pôr o nome do paciente (XREF) na página de resultado completo do PDF")
     s.add_argument("dir"); s.add_argument("--out", help="pasta dos relatórios (padrão: <dir>/analises)"); common(s)
     s.set_defaults(func=cmd_analyze)
 

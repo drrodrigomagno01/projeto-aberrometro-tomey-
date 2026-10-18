@@ -55,8 +55,9 @@ table.exames th { background:#eef1f7; }
       <label class="opt"><input type="checkbox" id="d6" checked> 6 mm</label>
       <label class="opt">Zernike ordem <input type="number" id="optOrder" value="6" min="4" max="8" style="width:48px"></label>
       <label class="opt"><input type="checkbox" id="optPdf" checked> gerar também PDF por exame</label>
+      <label class="opt"><input type="checkbox" id="optName" checked> nome do paciente (XREF) e data no relatório impresso</label>
     </div>
-    <p class="privacy">O navegador pode perguntar se deseja "enviar/carregar" os arquivos: é apenas a leitura local pela página — nada é enviado. Nomes de pacientes (XREF.dat) nunca entram nos relatórios; o código do estudo é um hash. Pastas com <code>analises/</code> são ignoradas.</p>
+    <p class="privacy">O navegador pode perguntar se deseja "enviar/carregar" os arquivos: é apenas a leitura local pela página — nada é enviado. O nome do paciente (XREF.dat) entra só no cabeçalho do relatório impresso, se a opção estiver marcada; JSON/CSV levam apenas o código do estudo (hash). Pastas com <code>analises/</code> são ignoradas.</p>
     <div id="status">aguardando o motor…</div>
     <progress id="prog" value="0" max="100" style="display:none"></progress>
   </div>
@@ -269,7 +270,7 @@ function currentOptions() {
   const c = $("optCenter").value;
   const centers = c === "ambos" ? ["vertice", "pupila"] : [c];
   const diameters = []; if ($("d4").checked) diameters.push(4.0); if ($("d6").checked) diameters.push(6.0);
-  return { centers, diameters: diameters.length ? diameters : [6.0], zernike_order: parseInt($("optOrder").value || "6", 10), maps: true, pdf: $("optPdf").checked };
+  return { centers, diameters: diameters.length ? diameters : [6.0], zernike_order: parseInt($("optOrder").value || "6", 10), maps: true, pdf: $("optPdf").checked, include_name: $("optName").checked };
 }
 function fmtDate(iso) { return iso ? iso.replace("T", " ") : "—"; }
 function onListed(m) {

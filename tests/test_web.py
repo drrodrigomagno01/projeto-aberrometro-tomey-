@@ -29,7 +29,7 @@ def test_list_folder(export_dir):
 
 
 def test_analyze_exam_html_contract(export_dir):
-    r = analyze_exam_html(export_dir, "90001", {"pdf": False, "diameters": [4.0, 6.0], "centers": ["vertice", "pupila"]})
+    r = analyze_exam_html(export_dir, "90001", {"pdf": False, "diameters": [4.0, 6.0], "centers": ["vertice", "pupila"], "include_name": False})
     assert set(["html", "json", "csv", "summary", "stem", "analysis_id", "study_id"]) <= set(r)
     assert "pdf_b64" not in r
     profs = {p["name"]: p for p in r["summary"]["profiles"]}
@@ -92,3 +92,28 @@ def test_resultado_completo_figure_and_html(export_dir, tmp_path):
     assert len(PdfReader(pdf).pages) >= 4
     r = analyze_exam_html(export_dir, "90001", {"pdf": False})
     assert "<figure class='completo'>" in r["html"] and r["html"].index("completo") < r["html"].index("class='detalhes'")
+
+
+def test_patient_name_only_on_printed_page(export_dir, tmp_path):
+    """Nome e data (opção do usuário): no cabeçalho HTML e na página 1 do PDF; nunca em JSON/CSV nem nas páginas técnicas."""
+    from pypdf import PdfReader
+    from tmsab.adapters import patient_display_name
+    from tmsab.adapters.tms4 import audit_reports_for_names
+    from tmsab.plots import _data_pt
+    assert patient_display_name(export_dir, "90001") == "PACIENTE SINTETICO"
+    assert patient_display_name(export_dir, "99999") is None and _data_pt("2026-08-05T11:56:35") == "05/08/2026 11:56"
+    r = analyze_exam_html(export_dir, "90001", {"pdf": True, "include_name": True})
+    assert "PACIENTE SINTETICO" in r["html"][: r["html"].index("class='detalhes'")]
+    assert "SINTETICO" not in r["json"] and "SINTETICO" not in r["csv"]
+    import base64
+    pdf = tmp_path / "n.pdf"; pdf.write_bytes(base64.b64decode(r["pdf_b64"]))
+    pages = [(p.extract_text() or "") for p in PdfReader(str(pdf)).pages]
+    assert "PACIENTE SINTETICO" in pages[0] and "Data do exame: 17/06/2026" in pages[0]
+    assert all("SINTETICO" not in t for t in pages[1:])
+    out = tmp_path / "analises"; out.mkdir()
+    (out / "a.json").write_text(r["json"], encoding="utf-8"); (out / "a.csv").write_text(r["csv"], encoding="utf-8")
+    (out / "a.pdf").write_bytes(pdf.read_bytes())
+    res = audit_reports_for_names(export_dir, str(out))
+    assert res["n_hits"] == 0 and res["n_hits_pagina_completa"] >= 1 and res["n_files"] == 3
+    r2 = analyze_exam_html(export_dir, "90001", {"pdf": False, "include_name": False})
+    assert "SINTETICO" not in r2["html"]

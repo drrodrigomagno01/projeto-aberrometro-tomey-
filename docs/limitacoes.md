@@ -38,7 +38,9 @@ versões.
 
 ## Dados pessoais
 
-Dados nominais não entram nos relatórios, no JSON/CSV nem nos logs; o programa usa códigos de estudo. O código é um
+Dados nominais entram **apenas** na página impressa "Resultado completo" (1ª página do PDF, figura do HTML e aba do
+programa), por opção do usuário, para o prontuário; não entram no JSON/CSV, nas páginas técnicas nem nos logs — essas
+saídas usam códigos de estudo. O código é um
 hash do nome/ID presente no `XREF.dat` (calculado na leitura e descartado) — isso é **pseudonimização, não
 anonimização**: quem tem a lista de pacientes da clínica pode recompor a correspondência, portanto a pasta
 exportada e a subpasta `analises/` continuam sendo dados pessoais sob a LGPD e devem ficar no ambiente da clínica.

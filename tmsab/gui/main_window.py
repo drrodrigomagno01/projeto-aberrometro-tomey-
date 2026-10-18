@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..adapters import AdapterError, detect_profile, import_tms_bundle, list_exams
+from ..adapters import AdapterError, detect_profile, import_tms_bundle, list_exams, patient_display_name
 from ..model import Analysis, NormalizedExam, OpticalProfile, QualityConfig, ReconstructionConfig, WavefrontResult
 from ..pipeline import default_profiles
 from ..plots import compare_scale, figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
@@ -245,7 +245,10 @@ class MainWindow(QMainWindow):
 
         self.auto_compute = QCheckBox("Calcular automaticamente ao abrir a pasta"); self.auto_compute.setChecked(True)
         self.auto_export = QCheckBox("Salvar relatórios em <pasta>/analises ao terminar"); self.auto_export.setChecked(True)
-        for cb in (self.auto_compute, self.auto_export):
+        self.with_name = QCheckBox("Nome do paciente (XREF) e data no resultado completo"); self.with_name.setChecked(True)
+        self.with_name.setToolTip("O nome entra só na página impressa/1ª página do PDF; JSON e CSV levam apenas o código do estudo.")
+        self.with_name.toggled.connect(lambda *_: self._refresh_summary_only())
+        for cb in (self.auto_compute, self.auto_export, self.with_name):
             cb.setStyleSheet("font-size:11px;")
             lay.addWidget(cb)
         crow = QHBoxLayout()
@@ -413,6 +416,17 @@ class MainWindow(QMainWindow):
         lay.addWidget(scroll, 1)
         return w
 
+    def _patient_name(self, st: PackageState) -> Optional[str]:
+        """Nome do XREF para o relatório impresso — só quando a opção está marcada e o exame é real."""
+        if not self.with_name.isChecked() or st.exam is None or st.exam.bundle.synthetic:
+            return None
+        return patient_display_name(st.directory, st.exam.identity.exam_id)
+
+    def _refresh_summary_only(self) -> None:
+        st = self.selected_state()
+        if st is not None:
+            self.fill_summary_tab(st)
+
     def fill_summary_tab(self, st: PackageState) -> None:
         ok = st.analysis is not None and st.exam is not None
         self.btn_print_summary.setEnabled(ok); self.btn_save_summary.setEnabled(ok)
@@ -420,7 +434,7 @@ class MainWindow(QMainWindow):
             self.cv_summary.clear("Calcule o exame para ver o resultado completo (topografia + frente de onda + tabelas).")
             return
         try:
-            figure_resultado_completo(st.exam, st.analysis, fig=self.cv_summary.figure)
+            figure_resultado_completo(st.exam, st.analysis, fig=self.cv_summary.figure, patient_name=self._patient_name(st))
             self.cv_summary.canvas.draw_idle()
         except Exception as e:  # noqa: BLE001
             self.cv_summary.clear(f"Não foi possível montar a página: {type(e).__name__}: {e}")
@@ -443,7 +457,7 @@ class MainWindow(QMainWindow):
             if dlg.exec() != QPrintDialog.Accepted:
                 return
         import io
-        fig = figure_resultado_completo(st.exam, st.analysis)
+        fig = figure_resultado_completo(st.exam, st.analysis, patient_name=self._patient_name(st))
         buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=220)
         img = QImage.fromData(buf.getvalue())
         painter = QPainter(printer)
@@ -464,7 +478,7 @@ class MainWindow(QMainWindow):
                 return
         else:
             path = os.path.join(tempfile.mkdtemp(prefix="tmsab_"), stem + ".pdf")
-        fig = figure_resultado_completo(st.exam, st.analysis)
+        fig = figure_resultado_completo(st.exam, st.analysis, patient_name=self._patient_name(st))
         fig.savefig(path, dpi=200)
         self.statusBar().showMessage(f"Resultado completo salvo em {path}", 10000)
         return path
@@ -1101,7 +1115,7 @@ class MainWindow(QMainWindow):
             self.export_package(st, d)
 
     def export_package(self, st: PackageState, out_dir: str) -> dict[str, str]:
-        paths = export_all(st.exam, st.analysis, out_dir)
+        paths = export_all(st.exam, st.analysis, out_dir, patient_name=self._patient_name(st))
         self.statusBar().showMessage("Exportado: " + ", ".join(os.path.basename(p) for p in paths.values()), 10000)
         return paths
 

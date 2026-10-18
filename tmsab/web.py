@@ -22,7 +22,7 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from . import CORE_VERSION
-from .adapters import AdapterError, import_tms_bundle, list_exams
+from .adapters import AdapterError, import_tms_bundle, list_exams, patient_display_name
 from .model import Analysis, NormalizedExam, QualityConfig, ReconstructionConfig
 from .pipeline import analyze_exam, default_profiles
 from .plots import figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
@@ -123,15 +123,17 @@ def _zernike_table(wf) -> str:
             + "".join(cells) + "</tbody></table>")
 
 
-def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True) -> str:
-    """Fragmento HTML de UM exame (seção <article>), com figuras PNG embutidas; imprimível."""
+def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True, patient_name: Optional[str] = None) -> str:
+    """Fragmento HTML de UM exame (seção <article>), com figuras PNG embutidas; imprimível.
+    `patient_name` (opção do usuário) aparece no cabeçalho e na página de resultado completo; nunca no JSON/CSV."""
+    from .plots import _data_pt
     ident = an.identity
     g = an.geometry
     cap = f"captura {ident.capture_index}" if ident.capture_index is not None else "captura —"
     head = (
-        f"<header><h2>Exame {_e(ident.exam_id)} — olho {_e(ident.eye or '?')} — {_e(cap)}</h2>"
+        f"<header><h2>{(_e(patient_name) + ' — ') if patient_name else ''}Exame {_e(ident.exam_id)} — olho {_e(ident.eye or '?')} — {_e(cap)}</h2>"
         f"<div class='ident'><span><b>Código do estudo:</b> {_e(ident.study_id)}</span>"
-        f"<span><b>Aquisição:</b> {_e(ident.acquired_at or 'não informada')} ({_e(ident.date_precision)})</span>"
+        f"<span><b>Data do exame:</b> {_e(_data_pt(ident.acquired_at))}</span>"
         f"<span><b>Equipamento:</b> {_e(an.device.model)} / sw {_e(an.device.software_version)}</span>"
         f"<span><b>Análise:</b> <code>{_e(an.analysis_id)}</code> em {_e(an.created_at)}</span>"
         f"<span><b>Núcleo:</b> tmsab {_e(CORE_VERSION)} (navegador)</span></div>"
@@ -154,7 +156,7 @@ def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True) -> s
     completo = ""
     if with_maps:
         try:
-            completo = (f"<figure class='completo'><img src='{_png(figure_resultado_completo(exam, an), dpi=150)}' "
+            completo = (f"<figure class='completo'><img src='{_png(figure_resultado_completo(exam, an, patient_name=patient_name), dpi=150)}' "
                         "alt='resultado completo (uma página)'></figure>")
         except Exception as e:  # noqa: BLE001
             completo = f"<p class='aviso'>Página de resultado completo indisponível: {_e(e)}</p>"
@@ -269,6 +271,7 @@ details.texto pre { font-size: 10.5px; white-space: pre-wrap; background: #f7f7f
 # análise de um exame → pacote de resultados
 # ---------------------------------------------------------------------------
 def _options(options: Optional[dict[str, Any]]) -> tuple[list, ReconstructionConfig, bool, bool]:
+    """include_name (padrão True): nome do paciente do XREF no cabeçalho/página impressa (nunca em JSON/CSV)."""
     o = dict(options or {})
     diam = [float(d) for d in o.get("diameters", [4.0, 6.0])]
     centers = tuple(o.get("centers", ["vertice", "pupila"]))
@@ -287,6 +290,7 @@ def analyze_exam_html(directory: str, exam_id: Optional[str], options: Optional[
     except AdapterError as e:
         return {"error": f"importação inválida: {e}", "exam_id": exam_id}
     an, _ = analyze_exam(exam, profiles, rec, QualityConfig(), with_maps=with_maps, progress=progress)
+    name = patient_display_name(directory, an.identity.exam_id) if dict(options or {}).get("include_name", True) else None
     out: dict[str, Any] = {"exam_id": an.identity.exam_id, "eye": an.identity.eye, "study_id": an.identity.study_id,
                            "capture_index": an.identity.capture_index, "acquired_at": an.identity.acquired_at,
                            "analysis_id": an.analysis_id, "stem": report_stem(an), "warnings": list(an.warnings)}
@@ -296,11 +300,11 @@ def analyze_exam_html(directory: str, exam_id: Optional[str], options: Optional[
                       "metrics": {k: (None if (isinstance(v, float) and not np.isfinite(v)) else v) for k, v in w.metrics.items()}}
                      for w in an.wavefronts],
     }
-    out["html"] = report_html(exam, an, with_maps=with_maps)
+    out["html"] = report_html(exam, an, with_maps=with_maps, patient_name=name)
     tmp = tempfile.mkdtemp(prefix="tmsab_web_")
     out["json"] = open(export_json(an, os.path.join(tmp, "a.json")), encoding="utf-8").read()
     out["csv"] = open(export_csv(an, os.path.join(tmp, "a.csv")), encoding="utf-8").read()
     if with_pdf:
-        with open(export_pdf(exam, an, os.path.join(tmp, "a.pdf")), "rb") as fh:
+        with open(export_pdf(exam, an, os.path.join(tmp, "a.pdf"), patient_name=name), "rb") as fh:
             out["pdf_b64"] = base64.b64encode(fh.read()).decode("ascii")
     return out

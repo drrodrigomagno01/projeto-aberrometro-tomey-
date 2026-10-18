@@ -6,6 +6,7 @@ from .tms4 import (  # noqa: F401
     list_exams,
     list_profiles,
     load_profile,
+    patient_display_name,
     patients_in_xref,
     read_xref,
 )

@@ -316,6 +316,36 @@ def read_xref(path: str) -> dict[str, dict[str, Any]]:
     return out
 
 
+def read_xref_names(path: str) -> dict[str, dict[str, str]]:
+    """Lê SOMENTE para exibição no relatório impresso (opção do usuário): {exame: {"last", "first"}} do XREF.dat.
+    Nunca é chamada pela importação/análise; o nome não entra em JSON, CSV, logs nem nas estruturas do cálculo."""
+    import csv
+    with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
+        lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+    start = next((i for i, ln in enumerate(lines[:3]) if "Eye" in ln and "Filename" in ln), 0)
+    out: dict[str, dict[str, str]] = {}
+    for r in csv.DictReader(lines[start:]):
+        m = re.search(r"(\d+)\.tms$", (r.get("Filename") or "").strip(), flags=re.IGNORECASE)
+        if m:
+            out[m.group(1)] = {"last": " ".join(str(r.get("Last Name") or "").split()), "first": " ".join(str(r.get("First Name") or "").split())}
+    return out
+
+
+def patient_display_name(directory: str, exam_id: Optional[str]) -> Optional[str]:
+    """Nome do paciente ("Nome Sobrenome") do XREF.dat da pasta, para o cabeçalho do relatório impresso; None se não houver."""
+    path = os.path.join(directory, "XREF.dat")
+    if not exam_id or not os.path.isfile(path):
+        return None
+    try:
+        rec = read_xref_names(path).get(str(exam_id))
+    except Exception:  # noqa: BLE001
+        return None
+    if not rec:
+        return None
+    name = " ".join(x for x in (rec.get("first", ""), rec.get("last", "")) if x)
+    return name or None
+
+
 def patients_in_xref(xref: dict[str, dict[str, Any]]) -> list[str]:
     """Códigos de paciente (pseudônimos) distintos presentes num índice lido por read_xref."""
     return sorted({v["patient_key"] for v in xref.values() if v.get("patient_key")})
@@ -344,7 +374,8 @@ def audit_reports_for_names(directory: str, out_dir: Optional[str] = None) -> di
     for tok in os.path.basename(os.path.abspath(directory).rstrip("/\\")).replace("_", " ").split():
         if len(tok) >= 3 and tok.upper() not in _AUDIT_STOPWORDS:
             tokens.add(tok.upper())
-    res: dict[str, Any] = {"n_tokens": len(tokens), "n_files": 0, "n_hits": 0, "files_with_hits": [], "pdf_checked": True}
+    res: dict[str, Any] = {"n_tokens": len(tokens), "n_files": 0, "n_hits": 0, "files_with_hits": [], "pdf_checked": True,
+                           "n_hits_pagina_completa": 0}   # nome na 1ª página do PDF é a opção "nome e data" do usuário (permitido)
     if not tokens or not os.path.isdir(out_dir):
         return res
     rx = re.compile(r"(?<![A-ZÀ-Ü0-9])(" + "|".join(re.escape(t) for t in sorted(tokens, key=len, reverse=True)) + r")(?![A-ZÀ-Ü0-9])")
@@ -362,16 +393,20 @@ def audit_reports_for_names(directory: str, out_dir: Optional[str] = None) -> di
             if PdfReader is None:
                 continue
             try:
-                text = "\n".join((pg.extract_text() or "") for pg in PdfReader(path).pages)
+                pages = [(pg.extract_text() or "") for pg in PdfReader(path).pages]
             except Exception:  # noqa: BLE001
                 continue
+            res["n_files"] += 1
+            # 1ª página = "resultado completo": pode levar nome e data por opção do usuário; as demais nunca
+            res["n_hits_pagina_completa"] += len(rx.findall(pages[0].upper())) if pages else 0
+            n = sum(len(rx.findall(t.upper())) for t in pages[1:])
         elif low.endswith((".json", ".csv", ".txt", ".md")):
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
+            res["n_files"] += 1
+            n = len(rx.findall(text.upper()))
         else:
             continue
-        res["n_files"] += 1
-        n = len(rx.findall(text.upper()))
         if n:
             res["n_hits"] += n
             res["files_with_hits"].append(name)

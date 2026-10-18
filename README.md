@@ -8,7 +8,7 @@ versões usadas, com controle de qualidade e proveniência.
 
 Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/2026): seções 1–15 e apêndices.
 
-> **Estado: versão de pesquisa 0.3.0.** O formato real das Data Tables do TMS-4N foi verificado com exames
+> **Estado: versão de pesquisa 0.3.1.** O formato real das Data Tables do TMS-4N foi verificado com exames
 > reais de 3 pacientes (perfil `tms4_datatables_v1`; orientação angular confirmada com astigmatismo de até 2,5 D;
 > marcos G0/G1 fechados — `docs/G0_resultado.md`). Nada aqui é alegação
 > diagnóstica, seleção de LIO ou planejamento terapêutico. Ver `docs/limitacoes.md`.
@@ -22,7 +22,7 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 | §5 Reconstrução (cônica + Zernike ordem 10, ou RBF/spline), traçado de raios, OPD, Zernike OSA ordem 6 | Implementado e verificado contra soluções analíticas |
 | §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows/macOS + versão HTML (Pyodide) | Implementado |
 | §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) + **página "Resultado completo"** (topografia axial/tangencial/refrativa/elevação + frente de onda + Zernike + tabelas, 1 folha A4) | Implementado |
-| §8 Suíte de verificação (67 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
+| §8 Suíte de verificação (68 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
 | §9 Estatística do piloto (repetibilidade, Bland–Altman com observações repetidas) + protocolo | Implementado (`tmsab stats`) |
 | §0 Inventário da estação / G0–G1 | **Fechados em 18/10/2026** com 14 exames reais de 3 pacientes — `docs/G0_resultado.md` (pendentes: tela "Sobre", olho de calibração, comparador) |
 | §9 Piloto com participantes e comparador | **Depende de dados reais** — `docs/protocolo_piloto.md` |
@@ -87,9 +87,11 @@ pytest                    # suíte de verificação
 Linha de comando: `tmsab analyze "D:\TMS\<paciente>"` faz o mesmo (relatórios em `analises/`);
 `tmsab batch RAIZ --out SAIDA` processa várias pastas de pacientes e gera `resumo_longo.csv` para `tmsab stats`.
 
-Nome do paciente: pode estar no nome da pasta e está no `XREF.dat`, mas **não entra em nenhum relatório** —
-o código de estudo (`P-XXXXXXXX`) é um hash do nome/ID lido do XREF e descartado na hora, igual para o mesmo
-paciente em qualquer pasta; o olho, a data/hora e o número da captura identificam o exame. **Atenção:** exportar de
+Nome do paciente: a página **Resultado completo** (aba do programa, 1ª página do PDF, figura do HTML) traz **nome
+do paciente e data do exame** lidos do `XREF.dat` — é o laudo para o prontuário; a opção *"Nome do paciente (XREF) e
+data no resultado completo"* pode ser desligada. JSON, CSV e as páginas técnicas do PDF **nunca** levam o nome: usam o
+código de estudo (`P-XXXXXXXX`, hash do nome/ID calculado na leitura e descartado, igual para o mesmo paciente em
+qualquer pasta); `tmsab audit PASTA` confere isso (nome permitido só na 1ª página dos PDFs). **Atenção:** exportar de
 novo para uma pasta que já tem uma exportação faz o TMS *acrescentar* os exames ao `XREF.dat` — o programa separa os
 pacientes pelo código e avisa, mas o certo é uma pasta nova por paciente. Uma pasta com subpastas (uma por
 exportação) também pode ser aberta de uma vez.
@@ -101,7 +103,7 @@ sintéticos (perfil v0) — e `tmsab.synthetic.write_export_folder_v1` gera past
 
 ```bash
 tmsab verify          # oval de Descartes (W≡0), esfera vs Seidel, traçado 3D vs referência meridional, sintéticos
-pytest -q             # 67 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
+pytest -q             # 68 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
 ```
 
 Resultados registrados: esfera R=7,8 mm → c(4,0)=+0,0204 µm a 3 mm (Seidel +0,0197); elipsoide Q=−1/n² →

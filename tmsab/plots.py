@@ -270,10 +270,24 @@ def _sq(fig: Figure, x: float, y: float, w: float):
     return fig.add_axes([x, y, w, w * fw / fh])
 
 
-def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Optional[Figure] = None) -> Figure:
+def _data_pt(iso: Optional[str]) -> str:
+    """'2026-08-05T11:56:35' → '05/08/2026 11:56'."""
+    if not iso:
+        return "não informada"
+    d, _, t = iso.partition("T")
+    try:
+        y, m, dd = d.split("-")
+        return f"{dd}/{m}/{y}" + (f" {t[:5]}" if t else "")
+    except ValueError:
+        return iso
+
+
+def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Optional[Figure] = None,
+                              patient_name: Optional[str] = None) -> Figure:
     """Página única A4 (retrato) com tudo: identificação, índices do TMS, 4 mapas topográficos (axial, tangencial,
     refrativo, elevação), frente de onda (total e alta ordem), coeficientes de Zernike e tabelas de resultados.
-    `fig` (opcional) é limpa e reutilizada — usado pelo canvas da interface."""
+    `fig` (opcional) é limpa e reutilizada — usado pelo canvas da interface. `patient_name` (opcional, lido do
+    XREF a pedido do usuário) aparece SÓ nesta página impressa — nunca em JSON/CSV."""
     from . import CORE_VERSION
     if fig is None:
         fig = Figure(figsize=(8.27, 11.69), dpi=100)
@@ -290,13 +304,23 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
     # ---- cabeçalho
     cap = f" · captura {ident.capture_index}" if ident.capture_index is not None else ""
     fig.text(0.04, 0.978, "Aberrometria corneana anterior calculada — resultado completo", fontsize=12.5, weight="bold", va="top")
-    fig.text(0.97, 0.978, f"tmsab {CORE_VERSION} · {analysis.created_at[:16].replace('T', ' ')}", fontsize=7, va="top", ha="right", color="#444")
+    fig.text(0.97, 0.978, f"tmsab {CORE_VERSION} · impresso {_data_pt(analysis.created_at)}", fontsize=7, va="top", ha="right", color="#444")
     dev = analysis.device.model.replace(" (presumido pelo formato)", "")
-    fig.text(0.04, 0.957, f"Código do estudo {ident.study_id}   ·   Exame {ident.exam_id}   ·   Olho {ident.eye or '?'}{cap}   ·   "
-             f"Aquisição {(ident.acquired_at or 'não informada').replace('T', ' ')}   ·   {dev}", fontsize=8.5, va="top")
-    tms_line = (f"Índices do TMS (XREF): SimK1 {iv('SimK1')} D @ {iv('SimK1 Ang.', '{:.0f}')}°   SimK2 {iv('SimK2')} D @ {iv('SimK2 Ang.', '{:.0f}')}°   "
-                f"CYL {iv('CYL')} D   SRI {iv('SRI')}   SAI {iv('SAI')}   Q {iv('Q')}   Es {iv('Es')}" if ix else "Índices do TMS: não disponíveis (sem XREF)")
-    fig.text(0.04, 0.940, tms_line, fontsize=7.5, va="top", color="#222")
+    if patient_name:
+        fig.text(0.04, 0.9585, f"Paciente: {patient_name}", fontsize=10, weight="bold", va="top")
+        fig.text(0.97, 0.9585, f"Data do exame: {_data_pt(ident.acquired_at)}   ·   Olho {ident.eye or '?'}{cap}", fontsize=9.5, weight="bold", va="top", ha="right")
+        fig.text(0.04, 0.9415, f"Exame {ident.exam_id}  ·  código {ident.study_id}  ·  {dev}  ·  "
+                 f"TMS: SimK1 {iv('SimK1')} D @ {iv('SimK1 Ang.', '{:.0f}')}°  SimK2 {iv('SimK2')} D @ {iv('SimK2 Ang.', '{:.0f}')}°  "
+                 f"CYL {iv('CYL')} D  SRI {iv('SRI')}  SAI {iv('SAI')}  Q {iv('Q')}" if ix else
+                 f"Exame {ident.exam_id}   ·   código do estudo {ident.study_id}   ·   {dev}   ·   índices do TMS: não disponíveis (sem XREF)",
+                 fontsize=7.3, va="top", color="#222")
+    else:
+        fig.text(0.04, 0.957, f"Código do estudo {ident.study_id}   ·   Exame {ident.exam_id}   ·   Olho {ident.eye or '?'}{cap}   ·   "
+                 f"Data do exame {_data_pt(ident.acquired_at)}   ·   {dev}", fontsize=8.5, va="top")
+    if not patient_name:
+        tms_line = (f"Índices do TMS (XREF): SimK1 {iv('SimK1')} D @ {iv('SimK1 Ang.', '{:.0f}')}°   SimK2 {iv('SimK2')} D @ {iv('SimK2 Ang.', '{:.0f}')}°   "
+                    f"CYL {iv('CYL')} D   SRI {iv('SRI')}   SAI {iv('SAI')}   Q {iv('Q')}   Es {iv('Es')}" if ix else "Índices do TMS: não disponíveis (sem XREF)")
+        fig.text(0.04, 0.940, tms_line, fontsize=7.5, va="top", color="#222")
     if analysis.synthetic:
         fig.text(0.5, 0.925, "*** EXAME SINTÉTICO — gerado por software; não corresponde a um paciente ***", fontsize=8, color="#a00", ha="center", va="top", weight="bold")
 
