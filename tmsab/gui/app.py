@@ -116,7 +116,7 @@ def run_smoke(app: QApplication, win, synth_dir: str | None, screenshot: str | N
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="tmsab-gui", description="Aberrometria corneana anterior calculada — programa desktop")
     parser.add_argument("--open", help="pacote a abrir ao iniciar")
-    parser.add_argument("--profile", default="tms4_datatables_v0", help="perfil do adaptador")
+    parser.add_argument("--profile", default="auto", help="perfil do adaptador (auto = detectar pelo formato)")
     parser.add_argument("--smoke", action="store_true", help="teste de fumaça (sem interação)")
     parser.add_argument("--synth-dir", help="pasta com pacotes sintéticos para o teste de fumaça")
     parser.add_argument("--screenshot", help="salva uma captura da janela no teste de fumaça")
@@ -132,7 +132,7 @@ def main(argv=None) -> int:
         win.close()
         return rc
     if args.open:
-        win.load_package(args.open)
+        win.open_export_folder(args.open)
     win.show()
     return app.exec()
 

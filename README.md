@@ -8,22 +8,22 @@ versões usadas, com controle de qualidade e proveniência.
 
 Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/2026): seções 1–15 e apêndices.
 
-> **Estado: versão de pesquisa 0.1.0.** O perfil de exportação do TMS é **presumido** (manual, seção 3.11.5) e
-> ainda **não foi confrontado com arquivos reais** (marco G0/G1). Nada aqui é alegação diagnóstica, seleção de
-> LIO ou planejamento terapêutico. Ver `docs/limitacoes.md`.
+> **Estado: versão de pesquisa 0.2.0.** O formato real das Data Tables do TMS-4N foi verificado com exames
+> reais (perfil `tms4_datatables_v1`, marcos G0/G1 fechados — `docs/G0_resultado.md`). Nada aqui é alegação
+> diagnóstica, seleção de LIO ou planejamento terapêutico. Ver `docs/limitacoes.md`.
 
 ## O que já está pronto
 
 | Camada (plano) | Estado |
 |---|---|
-| §3 Adaptador TMS-4/4N (HIT, RAD, ROC, DIO, PUP; Angle/Ring; ausências e interpolados; pareamento; hashes) | Implementado sobre perfil **presumido** `tms4_datatables_v0` — ajustar no G0/G1 |
+| §3 Adaptador TMS-4/4N (HIT, RAD, PUP, AVE, DIO/POW/ROC/RNG; XREF sem nomes; ausências e interpolados; hashes) | Implementado e **verificado com exames reais** (`tms4_datatables_v1`); perfil v0 mantido para pacotes sintéticos |
 | §4 Contrato de dados, máscaras, identidade do cálculo por hash | Implementado |
 | §5 Reconstrução (cônica + Zernike ordem 10, ou RBF/spline), traçado de raios, OPD, Zernike OSA ordem 6 | Implementado e verificado contra soluções analíticas |
 | §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows | Implementado |
 | §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) | Implementado |
 | §8 Suíte de verificação (53 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
 | §9 Estatística do piloto (repetibilidade, Bland–Altman com observações repetidas) + protocolo | Implementado (`tmsab stats`) |
-| §0 Inventário da estação / G0 | **Depende de você** — `docs/G0_checklist.md` |
+| §0 Inventário da estação / G0–G1 | **Fechados em 18/10/2026** — `docs/G0_resultado.md` (pendentes: tela "Sobre", olho de calibração, comparador) |
 | §9 Piloto com participantes e comparador | **Depende de dados reais** — `docs/protocolo_piloto.md` |
 
 ## Instalação (Windows)
@@ -47,27 +47,33 @@ tmsab --help              # linha de comando
 pytest                    # suíte de verificação
 ```
 
-## Uso em 5 passos
+## Uso no dia a dia (3 passos)
 
-1. No software do TMS, exporte as **Data Tables** do exame (HIT, RAD, ROC, DIO e, se existir, PUP) para uma
-   pasta — **uma pasta por exame e por olho**, com ≥ 4 casas decimais (ver `docs/G0_checklist.md`).
-2. Crie o manifesto do pacote (sem dados nominais): `tmsab manifest PASTA --eye OD --model TMS-4N --software X.Y --date 2026-10-20 --capture 1 --decimals 4`.
-3. Abra o programa, **Abrir pacote…**, confira a aba *Importação* (estado, diagnósticos, avisos) e *Geometria*
-   (altura, cobertura, R, Q, resíduo).
-4. Escolha o perfil (centro vértice/pupila, 4 e 6 mm, ordem 6) e **Calcular**. Cada perfil termina em um de três
-   estados: **disponível**, **indisponível** (motivo explícito) ou **inválida**.
-5. **Exportar relatório** (JSON canônico + CSV + PDF). Para vários exames: `tmsab batch PASTA_RAIZ --out SAIDA`
-   gera também `resumo_longo.csv`, entrada direta de `tmsab stats`.
+1. No TmsSw: selecione o paciente → **Ferramentas → Tabelas de Dados** → *Select All Exams of the current Patient*
+   → OK → salve numa **pasta nova por paciente** (ex.: `D:\TMS\<paciente>`). Saem `HIT_1_<exame>.dat`,
+   `RAD_1_<exame>.dat`, `PUP_…`, `AVE_…`, `DIO/POW/ROC/RNG_…` e `XREF.dat`.
+2. No programa: **Arquivo → Abrir pasta exportada do TMS (paciente)…** e escolha essa pasta. O programa
+   identifica cada exame (olho, data/hora e número da captura pelo XREF), **calcula automaticamente** os perfis
+   padrão (vértice e pupila, 4 e 6 mm, Zernike ordem 6) e **salva JSON + CSV + PDF em `<pasta>/analises/`**.
+   (As duas automações podem ser desligadas nas caixas do painel esquerdo.)
+3. Navegue pelas abas: *Importação* (diagnóstico, SimK/índices do TMS), *Geometria*, *Frente de onda*,
+   *Zernike*, *Comparação* (ex.: as duas capturas do mesmo olho), *Técnico*.
+
+Linha de comando: `tmsab analyze "D:\TMS\<paciente>"` faz o mesmo (relatórios em `analises/`);
+`tmsab batch RAIZ --out SAIDA` processa várias pastas de pacientes e gera `resumo_longo.csv` para `tmsab stats`.
+
+Nome do paciente: pode estar no nome da pasta e está no `XREF.dat`, mas **não entra em nenhum relatório** —
+o código de estudo é um hash do nome da pasta (`P-XXXXXXXX`); o olho, a data/hora e o número do exame identificam
+o exame.
 
 Sem arquivos reais, use **Gerar sintéticos…** (ou `tmsab synth --out PASTA`): 13 casos identificados como
-sintéticos (esfera, cônica, aplanático, tórica OD/OS, coma, trefoil, pupila deslocada, lacunas, ruído,
-precisão reduzida, Ring/Angle, irregular).
+sintéticos (perfil v0) — e `tmsab.synthetic.write_export_folder_v1` gera pastas no formato real para testes.
 
 ## Verificação científica
 
 ```bash
 tmsab verify          # oval de Descartes (W≡0), esfera vs Seidel, traçado 3D vs referência meridional, sintéticos
-pytest -q             # 53 ensaios (matriz da §8 em docs/validacao.md)
+pytest -q             # 59 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
 ```
 
 Resultados registrados: esfera R=7,8 mm → c(4,0)=+0,0204 µm a 3 mm (Seidel +0,0197); elipsoide Q=−1/n² →
@@ -82,13 +88,12 @@ tmsab/            núcleo: model, adapters/, geometry, optics, zernike, quality,
 tmsab/gui/        programa desktop (PySide6)
 tmsab/reference/  traçado meridional independente (verificação)
 tests/            suíte pytest (§8)
-docs/             G0_checklist, dicionario_campos, convencoes, validacao, protocolo_piloto, decisoes, limitacoes
+docs/             G0_checklist, G0_resultado, dicionario_campos, convencoes, validacao, protocolo_piloto, decisoes, limitacoes
 packaging/        PyInstaller spec, build_windows.bat, installer.iss (Inno Setup), build_linux.sh
 .github/          workflow que compila o .exe no Windows
 ```
 
 ## Próximo passo concreto
 
-Fechar o **G0**: confirmar modelo/versão do TMS, exportar um exame OD e um OS (Angle e Ring, 4+ casas),
-enviar a captura de tela da configuração de exportação e, se possível, Pentacam/OPD do mesmo olho no mesmo dia.
-Com isso o perfil `tms4_datatables_v0` é ajustado e marcado como `verificado`.
+**G3**: Pentacam ou OPD-Scan do mesmo olho no mesmo dia (3–5 pacientes) para conferir o modelo óptico em olhos
+reais; depois o piloto (`docs/protocolo_piloto.md`). Pendências menores do G0 em `docs/G0_resultado.md`.

@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..adapters import AdapterError, import_tms_bundle
+from ..adapters import AdapterError, detect_profile, import_tms_bundle, list_exams
 from ..model import Analysis, NormalizedExam, OpticalProfile, QualityConfig, ReconstructionConfig, WavefrontResult
 from ..pipeline import default_profiles
 from ..plots import compare_scale, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
@@ -75,6 +75,7 @@ ABOUT_TEXT = (
 class PackageState:
     key: str
     directory: str
+    exam_id: Optional[str] = None          # exame dentro de uma pasta exportada com vários (formato real do TMS)
     exam: Optional[NormalizedExam] = None
     analysis: Optional[Analysis] = None
     rec: object = None
@@ -85,7 +86,10 @@ class PackageState:
     @property
     def label(self) -> str:
         if self.exam is not None:
-            ident = f"{self.exam.identity.exam_id} {self.exam.identity.eye or '?'}"
+            cap = f" c{self.exam.identity.capture_index}" if self.exam.identity.capture_index else ""
+            ident = f"{self.exam.identity.exam_id} {self.exam.identity.eye or '?'}{cap}"
+        elif self.exam_id:
+            ident = f"{self.exam_id}"
         else:
             ident = os.path.basename(self.directory.rstrip("/\\"))
         return f"{ident} — {self.status}"
@@ -129,7 +133,7 @@ def _fmt(v, nd: int = 4, sign: bool = True) -> str:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, adapter_profile: str = "tms4_datatables_v0", interactive: bool = True):
+    def __init__(self, adapter_profile: str = "auto", interactive: bool = True):
         super().__init__()
         self.adapter_profile = adapter_profile
         self.interactive = interactive
@@ -147,6 +151,7 @@ class MainWindow(QMainWindow):
     def _build_menu(self):
         m = self.menuBar().addMenu("&Arquivo")
         for text, slot in (
+            ("Abrir pasta exportada do TMS (paciente)…", self.open_export_folder_dialog),
             ("Abrir pacote…", self.open_package_dialog),
             ("Abrir pasta com vários pacotes…", self.open_folder_dialog),
             ("Gerar sintéticos…", self.generate_synthetic_dialog),
@@ -235,6 +240,11 @@ class MainWindow(QMainWindow):
                     self.surf_order_spin.valueChanged, self.ref_combo.currentIndexChanged):
             sig.connect(lambda *_: self.on_params_changed())
 
+        self.auto_compute = QCheckBox("Calcular automaticamente ao abrir a pasta"); self.auto_compute.setChecked(True)
+        self.auto_export = QCheckBox("Salvar relatórios em <pasta>/analises ao terminar"); self.auto_export.setChecked(True)
+        for cb in (self.auto_compute, self.auto_export):
+            cb.setStyleSheet("font-size:11px;")
+            lay.addWidget(cb)
         crow = QHBoxLayout()
         self.btn_compute = QPushButton("Calcular"); self.btn_compute.clicked.connect(self.start_compute)
         self.btn_cancel = QPushButton("Cancelar"); self.btn_cancel.clicked.connect(self.cancel_compute); self.btn_cancel.setEnabled(False)
@@ -417,10 +427,37 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------- carregamento
     @Slot()
+    def open_export_folder_dialog(self):
+        d = QFileDialog.getExistingDirectory(self, "Abrir pasta exportada do TMS (Data Tables de um paciente)")
+        if d:
+            self.open_export_folder(d)
+
+    def open_export_folder(self, directory: str, auto: bool = True) -> list[str]:
+        """Fluxo principal: pasta exportada pelo TMS (um paciente, vários exames) → um item por exame,
+        cálculo automático e relatórios em <pasta>/analises (quando 'auto' estiver ligado)."""
+        directory = os.path.abspath(directory)
+        try:
+            exams = list_exams(directory)
+        except Exception as e:  # noqa: BLE001
+            self._msg("Abrir pasta exportada", f"Não foi possível listar os exames: {e}", "warn")
+            return []
+        if not exams:
+            # pasta de pacote único (v0/sintético) ou pasta com subpastas
+            if any(os.path.isdir(os.path.join(directory, n)) for n in os.listdir(directory)):
+                return self.load_folder(directory)
+            return [self.load_package(directory)]
+        keys = []
+        for e in exams:
+            keys.append(self.load_package(directory, exam_id=e["exam_id"]))
+        if auto and self.auto_compute.isChecked():
+            self.start_compute()
+        return keys
+
+    @Slot()
     def open_package_dialog(self):
         d = QFileDialog.getExistingDirectory(self, "Abrir pacote exportado do TMS")
         if d:
-            self.load_package(d)
+            self.open_export_folder(d)
 
     @Slot()
     def open_folder_dialog(self):
@@ -449,11 +486,22 @@ class MainWindow(QMainWindow):
             keys.append(self.load_package(write_bundle(spec, out_dir)))
         return keys
 
-    def load_package(self, directory: str) -> str:
-        key = os.path.abspath(directory)
+    def load_package(self, directory: str, exam_id: Optional[str] = None) -> str:
+        directory = os.path.abspath(directory)
+        if exam_id is None:
+            try:
+                found = list_exams(directory)
+            except Exception:  # noqa: BLE001
+                found = []
+            if len(found) == 1:
+                exam_id = found[0]["exam_id"]
+            elif len(found) > 1:
+                keys = [self.load_package(directory, exam_id=e["exam_id"]) for e in found]
+                return keys[0]
+        key = directory if exam_id is None else f"{directory}#{exam_id}"
         st = self.packages.get(key)
         if st is None:
-            st = PackageState(key=key, directory=key)
+            st = PackageState(key=key, directory=directory, exam_id=exam_id)
             self.packages[key] = st
             item = QListWidgetItem(st.label)
             item.setData(Qt.UserRole, key)
@@ -461,7 +509,7 @@ class MainWindow(QMainWindow):
             self.list.setCurrentItem(item)
         st.analysis = None; st.rec = None
         try:
-            st.exam = import_tms_bundle(key, self.adapter_profile)
+            st.exam = import_tms_bundle(directory, self._profile_for(directory), exam_id=exam_id)
             st.status, st.message = "carregado", ""
         except AdapterError as e:
             st.exam = None
@@ -473,6 +521,9 @@ class MainWindow(QMainWindow):
         if self.selected_state() is st:
             self.refresh_all_tabs(st)
         return key
+
+    def _profile_for(self, directory: str):
+        return detect_profile(directory) if self.adapter_profile in (None, "", "auto") else self.adapter_profile
 
     @Slot()
     def remove_selected(self):
@@ -540,14 +591,14 @@ class MainWindow(QMainWindow):
         if not profiles:
             self._msg("Perfil de análise", "Selecione pelo menos um diâmetro.", "warn")
             return
-        jobs = [(k, st.directory) for k, st in self.packages.items() if st.status != "calculado"]
+        jobs = [(k, st.directory, st.exam_id, self._profile_for(st.directory)) for k, st in self.packages.items() if st.status != "calculado"]
         if not jobs:
             self._msg("Calcular", "Nenhum pacote pendente (todos calculados com os parâmetros atuais).")
             return
-        for k, _ in jobs:
-            self.packages[k].status = "calculando"
+        for job in jobs:
+            self.packages[job[0]].status = "calculando"
         self._refresh_list_labels()
-        self.worker = AnalysisWorker(jobs, profiles, self.current_recon(), QualityConfig(), self.adapter_profile, parent=self)
+        self.worker = AnalysisWorker(jobs, profiles, self.current_recon(), QualityConfig(), parent=self)
         self.worker.progress.connect(self.on_progress)
         self.worker.package_done.connect(self.on_package_done)
         self.worker.package_failed.connect(self.on_package_failed)
@@ -609,6 +660,23 @@ class MainWindow(QMainWindow):
         if st is not None:
             self.refresh_all_tabs(st)
         self._auto_compare()
+        if not cancelled and self.auto_export.isChecked():
+            self._auto_export_reports()
+
+    def _auto_export_reports(self) -> None:
+        """Salva JSON/CSV/PDF de cada exame calculado em <pasta exportada>/analises/ (sem dados nominais nos arquivos)."""
+        n = 0
+        for st in self.packages.values():
+            if st.analysis is None or st.exam is None or st.exam.bundle.synthetic:
+                continue
+            out = os.path.join(st.directory, "analises")
+            try:
+                self.export_package(st, out)
+                n += 1
+            except Exception as e:  # noqa: BLE001
+                self.statusBar().showMessage(f"Falha ao salvar relatórios em {out}: {e}", 15000)
+        if n:
+            self.statusBar().showMessage(f"{n} relatório(s) salvos automaticamente na subpasta 'analises' da pasta exportada", 15000)
 
     def _auto_compare(self) -> None:
         """Refaz a comparação automaticamente quando os dois pacotes selecionados têm análise atual."""
@@ -945,7 +1013,8 @@ class MainWindow(QMainWindow):
             return
         n = 0
         for st in ready:
-            self.export_package(st, os.path.join(d, os.path.basename(st.directory)))
+            sub = os.path.basename(st.directory) + (f"_{st.exam_id}" if st.exam_id else "")
+            self.export_package(st, os.path.join(d, sub))
             n += 1
         self._msg("Exportar todos", f"{n} pacote(s) exportado(s) em {d}")
 

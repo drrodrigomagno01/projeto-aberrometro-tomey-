@@ -1,4 +1,7 @@
-# Dicionário de campos — exportação "Data Tables" do TMS-4/4N (presumido; confirmar no G0)
+# Dicionário de campos — exportação "Data Tables" do TMS-4/4N
+
+> **Formato real verificado em 18/10/2026** (perfil `tms4_datatables_v1`): ver a tabela em `docs/G0_resultado.md`. O texto abaixo é o dicionário presumido original (perfil v0), mantido para os pacotes sintéticos e para registro das hipóteses.
+
 
 Fonte documental: manual TMS-4N §3.11.5 e manual TMS-4 §3.11.5 (referências [1] e [2] do plano); guia Precilens [3].
 Tudo abaixo é **hipótese de trabalho** até a verificação com arquivos reais. A coluna "Verificado" deve ser

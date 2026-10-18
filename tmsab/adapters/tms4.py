@@ -151,13 +151,18 @@ def _decode_token(tok: str, rule: dict[str, Any], decimal: str) -> tuple[float, 
 
 
 def decode_field(raw: RawTable, role: str, rule: dict[str, Any], n_angles: int, n_rings_allowed: list[int],
-                 orientation: str = "auto") -> tuple[FieldTable, str]:
-    """Converte a tabela crua em FieldTable [n_rings, n_angles]; retorna também a orientação detectada."""
+                 orientation: str = "auto", trim_padding: bool = False) -> tuple[FieldTable, str]:
+    """Converte a tabela crua em FieldTable [n_rings, n_angles]; retorna também a orientação detectada.
+
+    trim_padding: a exportação real do TMS-4N tem 34 colunas por ângulo, das quais só os anéis do cone
+    (25 ou 31) têm dados; as colunas finais são zeros. Elas são removidas antes da validação.
+    """
     nrow, ncol = len(raw.rows), len(raw.rows[0])
+    max_rings = max(n_rings_allowed)
     if orientation == "auto":
-        if nrow == n_angles and ncol in n_rings_allowed:
+        if nrow == n_angles and (ncol in n_rings_allowed or (trim_padding and min(n_rings_allowed) <= ncol <= 64)):
             orientation = "angle_rows"
-        elif ncol == n_angles and nrow in n_rings_allowed:
+        elif ncol == n_angles and (nrow in n_rings_allowed or (trim_padding and min(n_rings_allowed) <= nrow <= 64)):
             orientation = "ring_rows"
         elif nrow == n_angles and ncol == n_angles:
             raise AdapterError(f"{role}: tabela {nrow}x{ncol} ambígua; requisito: informar 'orientation' no perfil")
@@ -172,8 +177,8 @@ def decode_field(raw: RawTable, role: str, rule: dict[str, Any], n_angles: int, 
     elif orientation != "ring_rows":
         raise AdapterError(f"orientação desconhecida no perfil: {orientation}")
     nr, na = tokens.shape
-    if na != n_angles or nr not in n_rings_allowed:
-        raise AdapterError(f"{role}: após orientação, dimensões {nr}x{na} inválidas")
+    if na != n_angles:
+        raise AdapterError(f"{role}: após orientação, dimensões {nr}x{na} inválidas ({n_angles} ângulos esperados)")
     values = np.empty((nr, na), dtype=float)
     states = np.empty((nr, na), dtype=np.int8)
     for i in range(nr):
@@ -184,7 +189,147 @@ def decode_field(raw: RawTable, role: str, rule: dict[str, Any], n_angles: int, 
     n_invalid = int((states == PointState.INVALID).sum())
     if n_invalid:
         raise AdapterError(f"{role}: {n_invalid} tokens não numéricos/não finitos; requisito: exportação íntegra (sem células corrompidas)")
+    if trim_padding:
+        has_data = (states != PointState.MISSING).any(axis=1)
+        last = int(np.max(np.where(has_data)[0])) + 1 if has_data.any() else 0
+        if last < nr:
+            values, states, tokens = values[:last], states[:last], tokens[:last]
+            nr = last
+    if nr not in n_rings_allowed or nr > max_rings:
+        raise AdapterError(f"{role}: {nr} anéis com dados; esperado {n_rings_allowed}; requisito: confirmar cone/exportação")
     return FieldTable(name=role, unit=rule.get("unit", ""), values=values, states=states, raw=tokens), orientation
+
+
+# ---------------------------------------------------------------------------
+# PUP no formato real (256 raios por ângulo) e XREF (índice do TMS, sem dados nominais)
+# ---------------------------------------------------------------------------
+def read_pupil_radii(path: str, rule: dict[str, Any], n_angles: int, theta_deg: np.ndarray) -> PupilData:
+    """PUP do TMS-4N: uma linha por ângulo com o raio da borda pupilar (mm) referido ao vértice; negativo = interpolado.
+
+    O centro pupilar é obtido por ajuste de círculo (mínimos quadrados) aos pontos da borda, no sistema canônico.
+    """
+    vals: list[float] = []
+    with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+        for ln in fh:
+            s = ln.strip()
+            if not s or s.startswith("#"):
+                continue
+            try:
+                vals.append(float(s.replace(",", ".")))
+            except ValueError:
+                raise AdapterError(f"PUP: linha não numérica '{s[:20]}'")
+    if len(vals) != n_angles:
+        raise AdapterError(f"PUP: {len(vals)} linhas; esperado {n_angles} raios (um por ângulo)")
+    r = np.array(vals, dtype=float)
+    interp = r < 0
+    if rule.get("negative_means_interpolated", True):
+        r = np.abs(r)
+    ok = np.isfinite(r) & (r > 0)
+    if ok.sum() < n_angles * 0.5:
+        return PupilData(state="ausente", frame=rule.get("frame", "desconhecido"), method="PUP com menos de 50% de pontos válidos")
+    th = np.radians(theta_deg)
+    x, y = r * np.cos(th), r * np.sin(th)
+    # ajuste de círculo: x² + y² + D x + E y + F = 0
+    A = np.column_stack([x[ok], y[ok], np.ones(ok.sum())])
+    b = -(x[ok] ** 2 + y[ok] ** 2)
+    (D, E, F), *_ = np.linalg.lstsq(A, b, rcond=None)
+    cx, cy = -D / 2.0, -E / 2.0
+    R = float(np.sqrt(max(cx**2 + cy**2 - F, 0.0)))
+    return PupilData(
+        state="registrada", center_x=float(cx), center_y=float(cy), diameter=2.0 * R,
+        frame=rule.get("frame", "vertice_topografico_polar"),
+        method=f"ajuste de círculo a {int(ok.sum())} pontos da borda PUP ({int(interp.sum())} interpolados)",
+        edge_r=r,
+    )
+
+
+XREF_EXCLUDED_COLUMNS = ("Last Name", "First Name", "ID", "-----")
+
+
+def read_xref(path: str) -> dict[str, dict[str, Any]]:
+    """Lê o XREF.dat (ou xref_anon.csv) exportado pelo TMS e devolve {exame: {eye, acquired_at, indices}}.
+
+    As colunas com identificação direta (nome, ID) NUNCA são lidas para a estrutura devolvida.
+    """
+    import csv
+    with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
+        lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+    # primeira linha pode ser cabeçalho de grupos (",,,Patient Record,...")
+    start = 0
+    for i, ln in enumerate(lines[:3]):
+        if "Eye" in ln and "Filename" in ln:
+            start = i
+            break
+    rows = list(csv.DictReader(lines[start:]))
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        fn = (r.get("Filename") or "").strip()
+        m = re.search(r"(\d+)\.tms$", fn, flags=re.IGNORECASE)
+        if not m:
+            continue
+        exam = m.group(1)
+        eye = (r.get("Eye") or "").strip().upper()
+        eye = {"OE": "OS"}.get(eye, eye) if eye in ("OD", "OS", "OE") else None
+        dt = (r.get("Date&Time") or "").strip()
+        acquired = None
+        m2 = re.match(r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})", dt)
+        if m2:
+            d, mo, y, hh, mi, ss = m2.groups()
+            acquired = f"{y}-{mo}-{d}T{hh}:{mi}:{ss}"
+        indices: dict[str, Any] = {}
+        for k, v in r.items():
+            if k is None or k in XREF_EXCLUDED_COLUMNS or k in ("Filename", "Date&Time", "Eye", "File REF."):
+                continue
+            try:
+                indices[k.strip()] = float(str(v).strip())
+            except (TypeError, ValueError):
+                pass
+        out[exam] = {"eye": eye, "acquired_at": acquired, "indices": indices, "native_path_hint": os.path.dirname(fn)}
+    return out
+
+
+def detect_profile(directory: str) -> str:
+    """Escolhe o perfil pelo padrão dos nomes: formato real do TMS-4N (HIT_1_53703.dat) ou pacote v0/sintético."""
+    names = os.listdir(directory) if os.path.isdir(directory) else []
+    if any(re.match(r"^(HIT|RAD)_\d+_\d+\.dat$", n, flags=re.IGNORECASE) for n in names):
+        return "tms4_datatables_v1"
+    return "tms4_datatables_v0"
+
+
+def list_exams(directory: str, profile: str | dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Lista os exames presentes numa pasta exportada do TMS (um paciente, vários exames/olhos/capturas).
+
+    Retorna dicionários {exam_id, eye, acquired_at, capture_index, files} ordenados por data/numero.
+    """
+    prof_name = profile or detect_profile(directory)
+    prof = load_profile(prof_name) if isinstance(prof_name, str) else prof_name
+    rx = re.compile(prof.get("exam_id_regex", "^(?P<exam>[^_]+)"))
+    groups: dict[str, list[str]] = {}
+    for name in sorted(os.listdir(directory)):
+        m = rx.match(name)
+        if m and os.path.isfile(os.path.join(directory, name)):
+            groups.setdefault(m.group("exam"), []).append(name)
+    xref: dict[str, dict[str, Any]] = {}
+    xcfg = prof.get("xref", {})
+    for cand in (xcfg.get("filename", "XREF.dat"), "xref_anon.csv"):
+        p = os.path.join(directory, cand)
+        if os.path.isfile(p):
+            try:
+                xref.update(read_xref(p))
+            except Exception:  # noqa: BLE001 — índice opcional
+                pass
+    exams = []
+    for exam, files in groups.items():
+        info = xref.get(exam, {})
+        exams.append({"exam_id": exam, "eye": info.get("eye"), "acquired_at": info.get("acquired_at"),
+                      "files": files, "indices": info.get("indices", {})})
+    exams.sort(key=lambda e: (e["acquired_at"] or "", int(e["exam_id"]) if e["exam_id"].isdigit() else 0))
+    counters: dict[str, int] = {}
+    for e in exams:
+        k = e["eye"] or "?"
+        counters[k] = counters.get(k, 0) + 1
+        e["capture_index"] = counters[k]
+    return exams
 
 
 # ---------------------------------------------------------------------------
@@ -237,18 +382,32 @@ def _match_eye(filename: str, eye_patterns: dict[str, list[str]]) -> Optional[st
     return hits[0] if hits else None
 
 
-def import_tms_bundle(directory: str, profile: str | dict[str, Any] = "tms4_datatables_v0",
-                      manifest_override: Optional[dict[str, Any]] = None) -> NormalizedExam:
-    """Importa um pacote (diretório) exportado do TMS e devolve o exame normalizado.
+def _pseudonym(directory: str) -> str:
+    """Código de estudo derivado do nome da pasta por hash (a pasta pode ter o nome do paciente; o código não)."""
+    import hashlib
+    base = os.path.basename(os.path.abspath(directory).rstrip("/\\"))
+    return "P-" + hashlib.sha256(base.encode("utf-8")).hexdigest()[:8].upper()
 
+
+def import_tms_bundle(directory: str, profile: str | dict[str, Any] | None = None,
+                      manifest_override: Optional[dict[str, Any]] = None, exam_id: Optional[str] = None) -> NormalizedExam:
+    """Importa um exame de uma pasta exportada do TMS e devolve o exame normalizado.
+
+    - profile None → detecção automática (formato real do TMS-4N ou pacote v0/sintético).
+    - exam_id → seleciona um exame numa pasta com vários (formato real: HIT_1_53703.dat, ...).
+    - XREF.dat (formato real) fornece olho, data/hora e índices do TMS; nome e ID do paciente nunca são lidos.
     Lança AdapterError com causa e requisito em qualquer inconsistência essencial.
     """
-    prof = load_profile(profile) if isinstance(profile, str) else profile
     if not os.path.isdir(directory):
         raise AdapterError(f"diretório não encontrado: {directory}")
+    prof_sel = profile if profile is not None else detect_profile(directory)
+    prof = load_profile(prof_sel) if isinstance(prof_sel, str) else prof_sel
     roles_cfg = prof["roles"]
     n_angles = int(prof["n_angles"])
     n_rings_allowed = [int(v) for v in prof["n_rings_allowed"]]
+    trim_padding = bool(prof.get("trim_padding_columns", False))
+    rx_exam = re.compile(prof.get("exam_id_regex", "^(?P<exam>[^_]+)"))
+    xref_name = prof.get("xref", {}).get("filename", "XREF.dat")
 
     # manifesto (opcional)
     manifest: dict[str, Any] = {}
@@ -259,9 +418,37 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] = "tms4_data
     if manifest_override:
         manifest.update(manifest_override)
 
+    # vários exames na mesma pasta: exigir seleção explícita
+    present_exams: set[str] = set()
+    for name in os.listdir(directory):
+        m = rx_exam.match(name)
+        if m and os.path.isfile(os.path.join(directory, name)):
+            present_exams.add(m.group("exam"))
+    if exam_id is None and len(present_exams) > 1:
+        raise AdapterError(f"a pasta contém {len(present_exams)} exames {sorted(present_exams)}; requisito: informar exam_id (use list_exams)")
+    if exam_id is not None and present_exams and exam_id not in present_exams:
+        raise AdapterError(f"exame {exam_id} não encontrado na pasta; presentes: {sorted(present_exams)}")
+
+    # índice XREF (sem dados nominais)
+    xref_info: dict[str, Any] = {}
+    xref_path = None
+    for cand in (xref_name, "xref_anon.csv"):
+        p = os.path.join(directory, cand)
+        if os.path.isfile(p):
+            xref_path = p
+            try:
+                allx = read_xref(p)
+            except Exception as e:  # noqa: BLE001
+                raise AdapterError(f"{cand}: índice ilegível ({e}); requisito: exportação íntegra")
+            sel = exam_id or (next(iter(present_exams)) if len(present_exams) == 1 else None)
+            if sel and sel in allx:
+                xref_info = allx[sel]
+            break
+
     files: list[SourceFile] = []
     tables: dict[str, tuple[RawTable, str]] = {}
     pupil = PupilData(state="ausente")
+    pup_path: Optional[str] = None
     eyes: set[str] = set()
     exam_ids: set[str] = set()
     diagnostics: list[str] = []
@@ -276,23 +463,35 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] = "tms4_data
         if name == os.path.basename(mpath):
             files.append(SourceFile(path=path, role="MANIFEST", sha256=sha256_file(path), size_bytes=os.path.getsize(path)))
             continue
+        if xref_path and os.path.abspath(path) == os.path.abspath(xref_path):
+            files.append(SourceFile(path=path, role="XREF", sha256=sha256_file(path), size_bytes=os.path.getsize(path)))
+            continue
+        m = rx_exam.match(name)
+        if exam_id is not None and (not m or m.group("exam") != exam_id):
+            continue      # arquivo de outro exame da mesma pasta
         role = _match_role(name, roles_cfg)
         if role is None:
-            files.append(SourceFile(path=path, role="OUTRO", sha256=sha256_file(path), size_bytes=os.path.getsize(path)))
-            diagnostics.append(f"arquivo ignorado (papel não reconhecido): {name}")
+            if m is None:
+                files.append(SourceFile(path=path, role="OUTRO", sha256=sha256_file(path), size_bytes=os.path.getsize(path)))
+                diagnostics.append(f"arquivo ignorado (papel não reconhecido): {name}")
             continue
-        if role in tables or (role == "PUP" and pupil.state != "ausente"):
+        if role in tables or (role == "PUP" and pup_path is not None):
             raise AdapterError(f"{name}: papel {role} duplicado no pacote; requisito: um arquivo por tabela e por exame")
         eye = _match_eye(name, prof.get("eye_patterns", {}))
         if eye:
             eyes.add(eye)
-        m = re.match(prof.get("exam_id_regex", "^(?P<exam>[^_]+)"), name)
         if m:
             exam_ids.add(m.group("exam"))
         sf = SourceFile(path=path, role=role, sha256=sha256_file(path), size_bytes=os.path.getsize(path))
+        fmt = roles_cfg[role].get("format")
         if role == "PUP":
-            pupil = read_pupil_file(path, roles_cfg["PUP"])
+            pup_path = path
+            if fmt != "radii_per_angle":
+                pupil = read_pupil_file(path, roles_cfg["PUP"])
             files.append(sf)
+            continue
+        if fmt == "ring_summary":
+            files.append(sf)      # AVE: só proveniência
             continue
         raw = read_table_text(path, prof)
         sf.n_rows, sf.n_cols, sf.delimiter, sf.decimal = len(raw.rows), len(raw.rows[0]), raw.delimiter, raw.decimal
@@ -304,10 +503,10 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] = "tms4_data
         if rule.get("required") and role not in tables:
             raise AdapterError(f"tabela obrigatória ausente: {role}; requisito: exportar {role} (Data Tables) do mesmo exame")
 
-    # lateralidade e exame: manifesto tem precedência, mas conflito bloqueia
-    eye_manifest = manifest.get("eye")
+    # lateralidade e exame: manifesto > XREF > nome de arquivo; conflito bloqueia
+    eye_manifest = manifest.get("eye") or xref_info.get("eye")
     if eye_manifest and eyes and eye_manifest not in eyes:
-        raise AdapterError(f"conflito de lateralidade: manifesto {eye_manifest} vs nomes {sorted(eyes)}")
+        raise AdapterError(f"conflito de lateralidade: manifesto/XREF {eye_manifest} vs nomes {sorted(eyes)}")
     if len(eyes) > 1:
         raise AdapterError(f"mistura de olhos no pacote: {sorted(eyes)}; requisito: um olho por pacote")
     if len(exam_ids) > 1:
@@ -315,18 +514,18 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] = "tms4_data
     eye = eye_manifest or (next(iter(eyes)) if eyes else None)
     if eye == "OE":
         eye = "OS"
-    exam_id = manifest.get("exam_id") or (next(iter(exam_ids)) if exam_ids else os.path.basename(os.path.abspath(directory)))
+    exam_id_final = manifest.get("exam_id") or exam_id or (next(iter(exam_ids)) if exam_ids else os.path.basename(os.path.abspath(directory)))
     if manifest.get("exam_id") and exam_ids and manifest["exam_id"] not in exam_ids:
         raise AdapterError(f"conflito de identificador de exame: manifesto {manifest['exam_id']} vs nomes {sorted(exam_ids)}")
     if eye is None:
-        warnings.append("lateralidade não informada (nem manifesto nem nome de arquivo)")
+        warnings.append("lateralidade não informada (nem manifesto, nem XREF, nem nome de arquivo)")
 
     # decodificação
     fields: dict[str, FieldTable] = {}
     orientations: dict[str, str] = {}
     shapes: set[tuple[int, int]] = set()
     for role, (raw, name) in tables.items():
-        ft, orient = decode_field(raw, role, roles_cfg[role], n_angles, n_rings_allowed, prof.get("orientation", "auto"))
+        ft, orient = decode_field(raw, role, roles_cfg[role], n_angles, n_rings_allowed, prof.get("orientation", "auto"), trim_padding)
         fields[role] = ft
         orientations[role] = orient
         shapes.add(ft.values.shape)
@@ -342,7 +541,7 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] = "tms4_data
         angle_start_deg=float(prof.get("angle_start_deg", 0.0)),
         angle_direction=int(prof.get("angle_direction", 1)),
         mirror_x=bool(prof.get("mirror_x", False)),
-        transform_verified=(prof.get("status") == "verificado") or bool(manifest.get("synthetic")),
+        transform_verified=(prof.get("status", "").startswith("verificado")) or bool(manifest.get("synthetic")),
         notes=prof.get("angle_note", ""),
     )
     k = np.arange(n_angles)
@@ -350,6 +549,8 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] = "tms4_data
     if frame.mirror_x:
         theta = 180.0 - theta
     theta = np.mod(theta, 360.0)
+    if pup_path is not None and roles_cfg["PUP"].get("format") == "radii_per_angle":
+        pupil = read_pupil_radii(pup_path, roles_cfg["PUP"], n_angles, theta)
 
     if prof.get("rad_meaning", "radial_plano") != "radial_plano":
         raise AdapterError("rad_meaning diferente de 'radial_plano' ainda não suportado (tarefa de investigação do formato)")
@@ -390,23 +591,56 @@ def import_tms_bundle(directory: str, profile: str | dict[str, Any] = "tms4_data
         cone=manifest.get("device", {}).get("cone"),
         calibration_state=str(manifest.get("device", {}).get("calibration_state", "nao_informado")),
     )
+    acquired = manifest.get("acquired_at") or xref_info.get("acquired_at")
+    if manifest.get("acquired_at"):
+        precision = str(manifest.get("date_precision", "dia"))
+    elif xref_info.get("acquired_at"):
+        precision = "segundo"
+    else:
+        precision = "desconhecida"
+    capture_index = manifest.get("capture_index")
+    if capture_index is None and xref_info and exam_id is not None:
+        try:
+            for e in list_exams(directory, prof):
+                if e["exam_id"] == exam_id:
+                    capture_index = e["capture_index"]
+        except Exception:  # noqa: BLE001
+            capture_index = None
+    if xref_info and str(manifest.get("device", {}).get("model", "")) in ("", "desconhecido"):
+        # o XREF não traz modelo; o cone de 25 anéis e o formato identificam a família TMS-4/4N
+        device.model = manifest.get("device", {}).get("model", "TMS-4N (presumido pelo formato)")
+        device.cone = device.cone or f"{n_rings} anéis"
     identity = ExamIdentity(
-        study_id=str(manifest.get("study_id", "sem_estudo")),
-        exam_id=str(exam_id),
+        study_id=str(manifest.get("study_id") or (_pseudonym(directory) if xref_info or exam_id else "sem_estudo")),
+        exam_id=str(exam_id_final),
         eye=eye,
-        acquired_at=manifest.get("acquired_at"),
-        date_precision=str(manifest.get("date_precision", "desconhecida" if not manifest.get("acquired_at") else "dia")),
-        capture_index=manifest.get("capture_index"),
+        acquired_at=acquired,
+        date_precision=precision,
+        capture_index=capture_index,
     )
+    export_settings = {"orientations": orientations, **manifest.get("export", {})}
+    if xref_info:
+        export_settings["tms_indices"] = xref_info.get("indices", {})
+        export_settings["tms_native_folder"] = xref_info.get("native_path_hint")
     bundle = SourceBundle(
         directory=os.path.abspath(directory), files=files, adapter_profile=prof["profile_id"],
-        adapter_version=prof.get("adapter_version", "0"), export_settings={"orientations": orientations, **manifest.get("export", {})},
+        adapter_version=prof.get("adapter_version", "0"), export_settings=export_settings,
         manifest=manifest, synthetic=bool(manifest.get("synthetic", False)),
     )
-    if prof.get("status") != "verificado" and not bundle.synthetic:
+    status = str(prof.get("status", ""))
+    if not status.startswith("verificado") and not bundle.synthetic:
         warnings.append(f"perfil de exportação '{prof['profile_id']}' NÃO verificado com arquivos reais — compatibilidade não declarada")
-    if not manifest:
-        warnings.append("manifesto ausente — modelo, versão de software e data não informados")
+    elif status == "verificado_estrutura" and not bundle.synthetic:
+        warnings.append("perfil verificado na estrutura (unidades, marcação, precisão); orientação angular verificada por ensaio de eixo do SimK")
+    if not manifest and not xref_info:
+        warnings.append("manifesto e XREF ausentes — modelo, versão de software e data não informados")
+    if xref_info and xref_info.get("indices"):
+        ix = xref_info["indices"]
+        diagnostics.append(
+            f"XREF do TMS: SimK1 {ix.get('SimK1', float('nan')):.2f} D @ {ix.get('SimK1 Ang.', float('nan')):.0f}°, "
+            f"SimK2 {ix.get('SimK2', float('nan')):.2f} D @ {ix.get('SimK2 Ang.', float('nan')):.0f}°, CYL {ix.get('CYL', float('nan')):.2f} D, "
+            f"SRI {ix.get('SRI', float('nan')):.2f}, SAI {ix.get('SAI', float('nan')):.2f}, Q {ix.get('Q', float('nan')):+.2f}"
+        )
     diagnostics.append(f"tabelas: {', '.join(f'{k} ({orientations[k]})' for k in fields)}; anéis={n_rings}, ângulos={n_angles}")
     diagnostics.append(f"pontos medidos {int(meas.sum())}, interpolados {int((st == PointState.INTERPOLATED).sum())}, ausentes {int((st == PointState.MISSING).sum())}")
     diagnostics.append(f"pupila: {pupil.state}" + (f" centro ({pupil.center_x:+.2f}, {pupil.center_y:+.2f}) mm, referencial {pupil.frame}" if pupil.state == "registrada" else ""))

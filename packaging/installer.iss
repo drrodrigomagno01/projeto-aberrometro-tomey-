@@ -1,7 +1,7 @@
 ; Inno Setup — instalador do AberrometriaTMS (opcional; usado no GitHub Actions quando o ISCC está disponível)
 ; Compilar: iscc packaging\installer.iss  (após o PyInstaller gerar dist\AberrometriaTMS)
 #define MyAppName "Aberrometria TMS (pesquisa)"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppExeName "AberrometriaTMS.exe"
 
 [Setup]

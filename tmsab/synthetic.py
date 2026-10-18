@@ -181,3 +181,71 @@ def standard_cases() -> list[SyntheticSpec]:
         SyntheticSpec(exam_id="SYN-RING", R=7.8, Q=-0.2, orientation="ring_rows", delimiter=";", eye="OD"),
         SyntheticSpec(exam_id="SYN-IRREG", R=7.6, Q=-0.5, zernike_um={"3,1": 4.0, "3,-3": 2.5, "4,0": 1.5, "5,1": 0.8}, eye="OD"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Formato REAL do TMS-4N (perfil v1): HIT_1_<exame>.dat etc., 256 linhas x 34 colunas, XREF.dat
+# ---------------------------------------------------------------------------
+def write_export_folder_v1(specs: list[SyntheticSpec], out_dir: str, first_exam: int = 90001,
+                           patient_name: tuple[str, str] = ("SINTETICO", "PACIENTE")) -> str:
+    """Escreve uma pasta no formato observado na estação real (TmsSw, cone de 25 anéis):
+    uma linha por ângulo (256), 34 colunas (anéis; as restantes zero), 4 casas decimais, negativo =
+    interpolado, zero = ausente; PUP com 256 raios da borda pupilar; AVE com potência e diâmetro médios por
+    anel; XREF.dat com cabeçalho de grupos, nome fictício (que o leitor deve ignorar), data/hora, olho e
+    caminho nativo. Devolve a pasta."""
+    os.makedirs(out_dir, exist_ok=True)
+    xref_rows = []
+    for i, spec in enumerate(specs):
+        exam = first_exam + i
+        surface = build_surface(spec)
+        s = sample_placido(spec, surface)
+        ncols = 34
+        nr = spec.n_rings
+
+        def table(values, state):
+            enc = np.where(state == 1, -np.abs(values), values)
+            enc = np.where(state == 2, 0.0, enc)
+            full = np.zeros((spec.n_angles, ncols))
+            full[:, :nr] = enc.T
+            lines = [",".join(f"{v:9.4f}" for v in row) for row in full]
+            return "\r\n".join(lines) + "\r\n"
+
+        for role, arr in (("HIT", s["z"]), ("RAD", s["r"]), ("DIO", s["dio"]), ("ROC", s["dio"] * 0.98), ("POW", s["dio"] * 1.02),
+                          ("RNG", s["r"] * 44.0)):
+            with open(os.path.join(out_dir, f"{role}_1_{exam}.dat"), "w", encoding="ascii", newline="") as fh:
+                fh.write(table(arr, s["state"]))
+        # PUP: raio da borda por ângulo, centro deslocado (pupil_center) e alguns pontos interpolados (negativos)
+        th = np.radians(s["theta_deg"])
+        cx, cy = spec.pupil_center
+        R = spec.pupil_diameter / 2.0
+        # raio da borda a partir do vértice para um círculo de centro (cx, cy) e raio R
+        b = cx * np.cos(th) + cy * np.sin(th)
+        r_edge = b + np.sqrt(np.maximum(R**2 - (cx**2 + cy**2) + b**2, 0.0))
+        r_edge = np.round(r_edge, 2)
+        r_edge[100:106] *= -1
+        with open(os.path.join(out_dir, f"PUP_1_{exam}.dat"), "w", encoding="ascii", newline="") as fh:
+            fh.write("\r\n".join(f"{v:.2f}" for v in r_edge) + "\r\n")
+        # AVE: potência média e diâmetro médio por anel (34 linhas)
+        ave = []
+        for j in range(ncols):
+            if j < nr:
+                ave.append(f"{np.nanmean(s['dio'][j]):9.4f},{2*np.nanmean(s['r'][j]):9.4f}")
+            else:
+                ave.append(f"{0.0:9.4f},{0.0:9.4f}")
+        with open(os.path.join(out_dir, f"AVE_1_{exam}.dat"), "w", encoding="ascii", newline="") as fh:
+            fh.write("\r\n".join(ave) + "\r\n")
+        hh = 9
+        mm = 30 + i
+        xref_rows.append(
+            f"1,{patient_name[0]} ,{patient_name[1]} ,0,,17/06/2026 {hh:02d}:{mm:02d}:00,{spec.eye},C:\\\\Tomey\\\\Tms\\\\NewExams\\\\{exam}.tms,"
+            f"44.70,{(spec.axis_deg + 90) % 180:.0f},44.30,{spec.axis_deg % 180:.0f},44.20,165,{abs(spec.cyl_D):.2f},44.44,0.06,0.22,0.33,0.39,1.53,0.80,0.09,0.00,0.34,0.98,0.00,0.00,"
+            f"44.54,0.20,57.30,0.16,172.84,0.13,44.45,0.21,57.61,0.24,166.56,0.15, 0.29, 0.31,{spec.Q:.2f}, 0.11, 0.89"
+        )
+    header1 = ",,,Patient Record,,,,,,,,,,,,,,,Corneal Statistics,,,,,,,,,,,,,,,Fourier Index Standard,,,,,,,Eccentricity,"
+    header2 = ("File REF.,Last Name,First Name,-----,ID,Date&Time,Eye,Filename,SimK1,SimK1 Ang.,SimK2,SimK2 Ang.,MinK,MinK Ang.,CYL,ACP,"
+               "SRI,SAI,CEI,SDP,DSI,OSI,CSI,KCI,IAI,AA,EDP,EDD,3mm Spherical Equ.,3mm Reg. Astig.,3mm Reg. Astig. Axis,3mm Asymmetry,"
+               "3mm Asymmetry Axis,3mm Higher order irregularity,6mm Spherical Equ.,6mm Reg. Astig.,6mm Reg. Astig. Axis,6mm Asymmetry,"
+               "6mm Asymmetry Axis,6mm Higher order irregularity,Es,Em,Q,E,p")
+    with open(os.path.join(out_dir, "XREF.dat"), "w", encoding="ascii", newline="") as fh:
+        fh.write("\r\n".join([header1, header2] + xref_rows) + "\r\n")
+    return out_dir

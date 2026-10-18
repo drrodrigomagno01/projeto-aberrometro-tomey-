@@ -3,7 +3,7 @@
   tmsab synth --out DIR                      gera pacotes sintéticos identificados
   tmsab manifest DIR --eye OD --model TMS-4N …  cria manifest.json para um pacote real
   tmsab import DIR                           valida/importa e mostra diagnóstico
-  tmsab analyze DIR --out OUT                importa, reconstrói, calcula e exporta JSON/CSV/PDF
+  tmsab analyze PASTA [--out OUT]            todos os exames da pasta exportada → JSON/CSV/PDF em PASTA/analises
   tmsab batch ROOT --out OUT                 processa todos os subdiretórios + resumo CSV (formato longo)
   tmsab verify                               suíte científica rápida (casos analíticos e sintéticos)
   tmsab stats TABELA.csv --out OUT           repetibilidade e concordância do piloto
@@ -73,23 +73,40 @@ def cmd_manifest(args):
     return 0
 
 
+def _profile_arg(args):
+    return None if getattr(args, "profile", "auto") in (None, "", "auto") else args.profile
+
+
+def _exams_in(directory, args):
+    """Exames de uma pasta: formato real (vários exames) ou pacote único."""
+    from .adapters import list_exams
+    try:
+        found = list_exams(directory, _profile_arg(args))
+    except Exception:  # noqa: BLE001
+        found = []
+    return [e["exam_id"] for e in found] if len(found) > 1 else [found[0]["exam_id"] if found else None]
+
+
 def cmd_import(args):
     from .adapters import AdapterError, import_tms_bundle
-    try:
-        exam = import_tms_bundle(args.dir, args.profile)
-    except AdapterError as e:
-        print(f"IMPORTAÇÃO INVÁLIDA: {e}")
-        return 2
-    print(f"exame {exam.identity.exam_id} olho {exam.identity.eye} — perfil {exam.bundle.adapter_profile} (sintético: {exam.bundle.synthetic})")
-    for d in exam.diagnostics:
-        print("  " + d)
-    for w in exam.warnings:
-        print("  AVISO: " + w)
-    if args.json:
-        from .model import to_jsonable
-        print(json.dumps(to_jsonable({"identity": exam.identity, "device": exam.device, "frame": exam.frame, "pupil": exam.pupil,
-                                      "files": exam.bundle.files}), ensure_ascii=False, indent=2))
-    return 0
+    rc = 0
+    for exam_id in _exams_in(args.dir, args):
+        try:
+            exam = import_tms_bundle(args.dir, _profile_arg(args), exam_id=exam_id)
+        except AdapterError as e:
+            print(f"IMPORTAÇÃO INVÁLIDA ({exam_id or args.dir}): {e}")
+            rc = 2
+            continue
+        print(f"exame {exam.identity.exam_id} olho {exam.identity.eye} captura {exam.identity.capture_index} data {exam.identity.acquired_at} — perfil {exam.bundle.adapter_profile} (sintético: {exam.bundle.synthetic})")
+        for d in exam.diagnostics:
+            print("  " + d)
+        for w in exam.warnings:
+            print("  AVISO: " + w)
+        if args.json:
+            from .model import to_jsonable
+            print(json.dumps(to_jsonable({"identity": exam.identity, "device": exam.device, "frame": exam.frame, "pupil": exam.pupil,
+                                          "files": exam.bundle.files}), ensure_ascii=False, indent=2))
+    return rc
 
 
 def _print_analysis(an):
@@ -103,22 +120,28 @@ def _print_analysis(an):
 
 
 def cmd_analyze(args):
+    """Analisa uma pasta exportada do TMS (todos os exames) ou um pacote único; relatórios em --out
+    (padrão: <pasta>/analises)."""
     from .adapters import AdapterError, import_tms_bundle
     from .pipeline import analyze_exam
     from .reporting import export_all
     t0 = time.time()
-    try:
-        exam = import_tms_bundle(args.dir, args.profile)
-    except AdapterError as e:
-        print(f"IMPORTAÇÃO INVÁLIDA: {e}")
-        return 2
-    an, _ = analyze_exam(exam, _profiles_from_args(args), _recon_from_args(args), with_maps=not args.no_pdf)
-    _print_analysis(an)
-    paths = export_all(exam, an, args.out)
-    for k, p in paths.items():
-        print(f"  {k}: {p}")
+    out = args.out or os.path.join(os.path.abspath(args.dir), "analises")
+    rc = 0
+    for exam_id in _exams_in(args.dir, args):
+        try:
+            exam = import_tms_bundle(args.dir, _profile_arg(args), exam_id=exam_id)
+        except AdapterError as e:
+            print(f"IMPORTAÇÃO INVÁLIDA ({exam_id or args.dir}): {e}")
+            rc = 2
+            continue
+        an, _ = analyze_exam(exam, _profiles_from_args(args), _recon_from_args(args), with_maps=not args.no_pdf)
+        _print_analysis(an)
+        paths = export_all(exam, an, out)
+        for k, p in paths.items():
+            print(f"  {k}: {p}")
     print(f"tempo total {time.time()-t0:.1f} s")
-    return 0
+    return rc
 
 
 def _long_rows(an):
@@ -148,17 +171,19 @@ def cmd_batch(args):
         d = os.path.join(args.root, name)
         if not os.path.isdir(d):
             continue
-        try:
-            exam = import_tms_bundle(d, args.profile)
-            an, _ = analyze_exam(exam, _profiles_from_args(args), _recon_from_args(args), with_maps=not args.no_pdf)
-            export_all(exam, an, os.path.join(args.out, name))
-            rows.extend(_long_rows(an))
-            n_ok += 1
-            print(f"OK   {name}: {an.analysis_id}")
-        except AdapterError as e:
-            n_fail += 1
-            rows.append({"participante": "", "olho": "", "metodo": "TMS_calc", "captura": "", "exame": name, "perfil": "", "metrica": "importacao", "valor": f"INVALIDA: {e}", "analise": ""})
-            print(f"FALHA {name}: {e}")
+        for exam_id in _exams_in(d, args):
+            tag = name + (f"_{exam_id}" if exam_id else "")
+            try:
+                exam = import_tms_bundle(d, _profile_arg(args), exam_id=exam_id)
+                an, _ = analyze_exam(exam, _profiles_from_args(args), _recon_from_args(args), with_maps=not args.no_pdf)
+                export_all(exam, an, os.path.join(args.out, tag))
+                rows.extend(_long_rows(an))
+                n_ok += 1
+                print(f"OK   {tag}: {an.analysis_id}")
+            except AdapterError as e:
+                n_fail += 1
+                rows.append({"participante": "", "olho": "", "metodo": "TMS_calc", "captura": "", "exame": tag, "perfil": "", "metrica": "importacao", "valor": f"INVALIDA: {e}", "analise": ""})
+                print(f"FALHA {tag}: {e}")
     path = os.path.join(args.out, "resumo_longo.csv")
     with open(path, "w", encoding="utf-8", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=["participante", "olho", "metodo", "captura", "exame", "perfil", "metrica", "valor", "analise"], delimiter=";")
@@ -276,7 +301,7 @@ def build_parser():
     s.set_defaults(func=cmd_manifest)
 
     def common(sp):
-        sp.add_argument("--profile", default="tms4_datatables_v0", help="perfil do adaptador (nome ou caminho JSON)")
+        sp.add_argument("--profile", default="auto", help="perfil do adaptador (auto = detectar pelo formato; nome ou caminho JSON)")
         sp.add_argument("--diameters", default="4,6")
         sp.add_argument("--centers", default="vertice,pupila")
         sp.add_argument("--order", type=int, default=6)
@@ -288,11 +313,11 @@ def build_parser():
         sp.add_argument("--no-pdf", action="store_true", help="não gera mapas/PDF (mais rápido)")
 
     s = sub.add_parser("import", help="valida e importa um pacote")
-    s.add_argument("dir"); s.add_argument("--profile", default="tms4_datatables_v0"); s.add_argument("--json", action="store_true")
+    s.add_argument("dir"); s.add_argument("--profile", default="auto"); s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_import)
 
-    s = sub.add_parser("analyze", help="analisa um pacote e exporta relatórios")
-    s.add_argument("dir"); s.add_argument("--out", required=True); common(s)
+    s = sub.add_parser("analyze", help="analisa uma pasta exportada do TMS (todos os exames) e salva relatórios")
+    s.add_argument("dir"); s.add_argument("--out", help="pasta dos relatórios (padrão: <dir>/analises)"); common(s)
     s.set_defaults(func=cmd_analyze)
 
     s = sub.add_parser("batch", help="processa todos os subdiretórios de ROOT")

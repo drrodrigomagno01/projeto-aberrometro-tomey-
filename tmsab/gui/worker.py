@@ -18,10 +18,18 @@ class AnalysisWorker(QThread):
     package_failed = Signal(str, str)                 # chave, mensagem
     finished_all = Signal(bool)                       # True se cancelado
 
-    def __init__(self, jobs: list[tuple[str, str]], profiles: list[OpticalProfile], recon: ReconstructionConfig,
-                 qc: QualityConfig | None = None, adapter_profile: str = "tms4_datatables_v0", parent: Any = None):
+    def __init__(self, jobs: list[tuple], profiles: list[OpticalProfile], recon: ReconstructionConfig,
+                 qc: QualityConfig | None = None, adapter_profile: str = "auto", parent: Any = None):
         super().__init__(parent)
-        self.jobs = list(jobs)
+        # jobs: (chave, diretório) ou (chave, diretório, exam_id, perfil)
+        norm = []
+        for j in jobs:
+            j = tuple(j)
+            key, directory = j[0], j[1]
+            exam_id = j[2] if len(j) > 2 else None
+            prof = j[3] if len(j) > 3 else adapter_profile
+            norm.append((key, directory, exam_id, prof))
+        self.jobs = norm
         self.profiles = list(profiles)
         self.recon = recon
         self.qc = qc or QualityConfig()
@@ -37,16 +45,16 @@ class AnalysisWorker(QThread):
     def run(self) -> None:
         n = max(1, len(self.jobs))
         cancelled = False
-        for i, (key, directory) in enumerate(self.jobs):
+        for i, (key, directory, exam_id, prof) in enumerate(self.jobs):
             if self._cancel:
                 cancelled = True
                 break
             base = int(100 * i / n)
             span = max(1, int(100 / n))
-            label = directory.rstrip("/\\").split("/")[-1].split("\\")[-1]
+            label = directory.rstrip("/\\").split("/")[-1].split("\\")[-1] + (f" #{exam_id}" if exam_id else "")
             self.progress.emit(base, f"{label}: importação")
             try:
-                exam = import_tms_bundle(directory, self.adapter_profile)
+                exam = import_tms_bundle(directory, None if prof in (None, "", "auto") else prof, exam_id=exam_id)
             except AdapterError as e:
                 self.package_failed.emit(key, f"importação inválida: {e}")
                 continue

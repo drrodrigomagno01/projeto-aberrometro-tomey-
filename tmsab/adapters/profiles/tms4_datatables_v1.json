@@ -1,0 +1,51 @@
+{
+  "profile_id": "tms4_datatables_v1",
+  "adapter_version": "0.2.0",
+  "status": "verificado_estrutura",
+  "description": "Perfil do formato REAL das Data Tables do TMS-4N (software TmsSw), observado em 18/10/2026 na estação da clínica (cone de 25 anéis). Estrutura, unidades, marcação de ausentes/interpolados e precisão verificadas com arquivos reais; a orientação angular (início às 3 h, sentido anti-horário) e o espelhamento são verificados pelo ensaio de eixo do SimK (ver docs/G0_resultado.md).",
+  "device_models": ["TMS-4", "TMS-4N"],
+  "n_angles": 256,
+  "n_rings_allowed": [25, 31],
+  "table_columns": 34,
+  "trim_padding_columns": true,
+  "angle_start_deg": 0.0,
+  "angle_direction": 1,
+  "mirror_x": false,
+  "angle_note": "Linha k da tabela = ângulo k·360/256 a partir das 3 horas, anti-horário na vista do observador (verificado pelo eixo do SimK em OD e OS).",
+  "delimiters": [","],
+  "decimal": ".",
+  "orientation": "angle_rows",
+  "rad_meaning": "radial_plano",
+  "height": {
+    "reference": "plano_apical",
+    "sign": 1,
+    "note": "HIT = profundidade sagital em mm a partir do plano apical, positivo posterior; 4 casas decimais (0,1 µm). Negativo = ponto interpolado pelo TMS; 0 = ausente (colunas 26–34 são preenchimento)."
+  },
+  "roles": {
+    "HIT": {"patterns": ["^HIT_\\d+_\\d+\\.dat$", "(?i)^HIT_"], "unit": "mm", "required": true,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true},
+    "RAD": {"patterns": ["^RAD_\\d+_\\d+\\.dat$", "(?i)^RAD_"], "unit": "mm", "required": true,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true},
+    "DIO": {"patterns": ["^DIO_\\d+_\\d+\\.dat$", "(?i)^DIO_"], "unit": "D", "required": false,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true},
+    "POW": {"patterns": ["^POW_\\d+_\\d+\\.dat$", "(?i)^POW_"], "unit": "D", "required": false,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true},
+    "ROC": {"patterns": ["^ROC_\\d+_\\d+\\.dat$", "(?i)^ROC_"], "unit": "D", "required": false,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true,
+            "note": "Apesar do nome, os valores observados estão em dioptrias (potência tangencial/instantânea presumida), não em mm."},
+    "RNG": {"patterns": ["^RNG_\\d+_\\d+\\.dat$", "(?i)^RNG_"], "unit": "px", "required": false,
+            "missing_tokens": ["", "*", "NaN", "nan", "-"], "zero_is_missing": true, "negative_means_interpolated": true},
+    "AVE": {"patterns": ["^AVE_\\d+_\\d+\\.dat$", "(?i)^AVE_"], "unit": "D;mm", "required": false, "format": "ring_summary",
+            "note": "34 linhas (uma por anel): potência média (D) e diâmetro médio do anel (mm)."},
+    "PUP": {"patterns": ["^PUP_\\d+_\\d+\\.dat$", "(?i)^PUP_"], "unit": "mm", "required": false, "format": "radii_per_angle",
+            "frame": "vertice_topografico_polar", "negative_means_interpolated": true,
+            "note": "256 linhas: raio da borda pupilar (mm) por ângulo, referido ao vértice; negativo = ponto interpolado."}
+  },
+  "eye_patterns": {},
+  "exam_id_regex": "^(?:HIT|RAD|DIO|POW|ROC|RNG|AVE|PUP)_\\d+_(?P<exam>\\d+)\\.dat$",
+  "manifest_filename": "manifest.json",
+  "xref": {
+    "filename": "XREF.dat",
+    "note": "Índice exportado pelo TMS com nome do paciente, data/hora, olho, caminho nativo (C:\\Tomey\\Tms\\NewExams\\<exame>.tms), SimK, índices de Klyce, índices de Fourier e excentricidade. O organizador lê apenas as colunas sem identificação direta."
+  }
+}

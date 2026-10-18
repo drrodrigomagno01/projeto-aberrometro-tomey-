@@ -142,4 +142,4 @@ def test_real_profile_marks_unverified_and_no_manifest(synth_root, tmp_path):
     e = import_tms_bundle(str(d))
     assert e.bundle.synthetic is False
     assert e.frame.transform_verified is False
-    assert any("NÃO verificado" in w for w in e.warnings) and any("manifesto ausente" in w for w in e.warnings)
+    assert any("NÃO verificado" in w for w in e.warnings) and any("manifesto e XREF ausentes" in w for w in e.warnings)
