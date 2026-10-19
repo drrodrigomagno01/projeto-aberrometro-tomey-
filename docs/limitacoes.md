@@ -35,6 +35,14 @@ versões.
 9. TMS-5 (anterior + posterior) **não** é suportado nesta versão (adaptador próprio e nova validação, plano §15).
 10. Estatística do piloto implementa Bland–Altman para observações repetidas com um olho por participante; dois
     olhos exigem modelo com agrupamento (não implementado).
+11. **Ceratometria por zona** (0.4.0): K1/K2/eixos são da **face anterior** (Plácido), na convenção ceratométrica
+    (n 1,3375). O astigmatismo **posterior** não é medido, então o astigmatismo corneano total é desconhecido; LIO
+    tórica exige correção posterior (por exemplo, Barrett) fora do programa. Os valores **mudam com a zona** (num
+    olho real, ΔK de 1,91 D a Ø 1 mm, 1,49 D a 3 mm e 0,9 D a 5–6 mm): sempre ler a zona junto do número. A zona
+    pupilar usa a pupila de **entrada** da captura, sob a iluminação do Plácido (5,8–7,8 mm nos exames reais), não uma
+    pupila mesópica/escotópica padronizada; circunferências e anéis são centrados no vértice. Com ΔK < 0,50 D o
+    eixo varia entre zonas e capturas (marcado na tabela). A tabela é **dado**, não recomendação: a escolha do K para
+    cálculo de LIO ou para cirurgia refrativa é do cirurgião.
 
 ## Dados pessoais
 

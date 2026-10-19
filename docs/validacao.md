@@ -1,7 +1,7 @@
 # Verificação científica e de software (plano §8)
 
 Quatro níveis: (1) interpretação dos arquivos; (2) fidelidade geométrica; (3) cálculo óptico e numérico;
-(4) desempenho em aquisições reais. Os níveis 1–3 estão cobertos por `pytest` (53 ensaios) e por `tmsab verify`.
+(4) desempenho em aquisições reais. Os níveis 1–3 estão cobertos por `pytest` (119 ensaios, 1 deles só local com exames reais) e por `tmsab verify`.
 O nível 4 depende de dados reais (G0) e do piloto (§9). Aprovar um nível não aprova o seguinte.
 
 ## Matriz mínima de ensaios → implementação
@@ -19,6 +19,10 @@ O nível 4 depende de dados reais (G0) e do piloto (§9). Aprovar um nível não
 | Convergência | `test_convergence_with_ray_grid` (49/97/193 raios por lado) | Δc(4,0), Δc(3,1) < 2×10⁻⁴ µm entre 97 e 193 | passa |
 | Lacunas e deslocamento | `test_missing_sector_blocks_6mm_but_not_4mm`, `test_interpolated_sector_is_used_but_reported`, `test_pupil_centered_profile_shows_decentration_coma` | setor ausente ≥ 60° bloqueia 6 mm e preserva 4 mm; interpolado é usado mas reportado; deslocamento pupilar (+0,3, −0,2) mm gera coma com sinal do deslocamento e magnitude da verdade analítica (< 3×10⁻³ µm) | passa |
 | Saídas | `test_exports_consistent`, `test_blocked_profile_reported_as_absence` | JSON, CSV e objeto com o mesmo c(3,1); perfil bloqueado reportado como ausência (não zero); JSON sem NaN | passa |
+| Ceratometria — método | `test_fourier_recupera_k1_k2_e_eixos`, `test_torica_q0_k1_plano_k2_curvo_e_eixos`, `test_torica_asferica_contra_potencia_axial_analitica` | K1 = plano, K2 = curvo, eixos TABO em OD e OS (0/30/90/172°) a < 0,03 D e 0,5° da superfície construída; potência axial contra a fórmula analítica | passa |
+| Ceratometria — zonas | `test_aneis_medidos_…`, `test_zona_pupilar_media_por_area_igual_ao_acp`, `test_zona_0_d_no_vertice_igual_a_zona_pupilar_centrada`, `test_zonas_fora_da_faixa_dos_aneis`, `test_palpebra_interpolada_marca_e_ausente_bloqueia`, `test_pupila_ausente_…` | anel = definição do AVE; zona pupilar = ACP; zona 0–d = pupila centrada (< 10⁻⁶ D); lacuna central/fora da cobertura/setor ausente → indisponível com motivo; interpolado → marca †; pupila ausente nunca vira vértice | passa |
+| Ceratometria — conferência e alerta | `test_simk_regra_tms_em_potencia_construida`, `test_alerta_astigmatismo_dependente_da_zona`, `test_exames_reais_reproduzem_simk_e_acp_do_tms` (local, `TMSAB_REAL_DATA`) | SimK pela regra do TMS-4N; nos 10 exames reais SimK ≤ 0,02 D, ACP ≤ 0,03 D e Fourier 3 mm do XREF ≤ 0,15 D / 3°; alerta só acima dos limites | passa |
+| Ceratometria — saídas | `test_keratometria_saidas.py`, `test_keratometria_pagina.py` | CSV (seção própria, seções antigas byte a byte iguais), relatório, HTML, CLI e folha A4 com os mesmos números do objeto; linha do SimK do XREF com K1 = SimK2; sem nome nas saídas técnicas; folha sem sobreposição e dentro das margens | passa |
 | Distribuição | workflow `build-windows.yml` + `build_windows.bat` | executável roda `verify`, `synth`, `analyze` sem rede | a executar no runner Windows |
 
 ## Casos ópticos que evitam falsos sucessos

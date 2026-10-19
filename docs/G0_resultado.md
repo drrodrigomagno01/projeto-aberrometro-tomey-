@@ -89,6 +89,16 @@ mais a diferença de zona. O "6mm Reg. Astig." do XREF é a *amplitude* de Fouri
 - Exportações repetidas do mesmo exame (4 subpastas, 33 arquivos cada) são **byte a byte idênticas** → a identidade
   do cálculo (`analysis_id`) é a mesma, como exige a §4.
 
+## 4b. SimK e ACP do TMS reproduzidos (18/10/2026, versão 0.4.0)
+
+Com a ceratometria por zona (D23), o programa recalcula a cada análise o SimK pela regra do TMS-4N — média dos anéis
+6–8 (≈ Ø 2,5 mm) em cada meridiano completo; curvo = máximo; plano = +90° — e a média por área dentro do contorno
+pupilar. Nos 10 exames distintos: SimK curvo/plano a ≤ 0,01 D do XREF em 9 de 10 e a 0,03 D no 10º (27204, CYL
+0,75 D, eixo do meridiano máximo 4° fora); **Km da zona pupilar × ACP: erro médio 0,006 D (máx 0,017)**. O eixo do
+2º harmônico (a 3 mm) repete entre capturas a 0,1–3°, contra 2–13° do eixo do SimK. O SimK do TMS-4N é uma zona de
+≈ 2,1–2,9 mm, não de 3 mm. O "3mm Reg. Astig." do XREF é a **amplitude** do 2º harmônico (metade do cilindro): 2 × amplitude
+fica a ≤ 0,11 D do ΔK da zona 0–3 mm nos 10 exames, e o eixo a 1–2° do meridiano curvo quando ΔK ≥ 0,75 D.
+
 ## 5. Pendências
 
 - Confirmar modelo/versão do software na tela "Sobre" do TmsSw (o formato indica TMS-4/4N com cone de 25).

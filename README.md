@@ -8,7 +8,7 @@ versões usadas, com controle de qualidade e proveniência.
 
 Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/2026): seções 1–15 e apêndices.
 
-> **Estado: versão de pesquisa 0.3.1.** O formato real das Data Tables do TMS-4N foi verificado com exames
+> **Estado: versão de pesquisa 0.4.0.** O formato real das Data Tables do TMS-4N foi verificado com exames
 > reais de 3 pacientes (perfil `tms4_datatables_v1`; orientação angular confirmada com astigmatismo de até 2,5 D;
 > marcos G0/G1 fechados — `docs/G0_resultado.md`). Nada aqui é alegação
 > diagnóstica, seleção de LIO ou planejamento terapêutico. Ver `docs/limitacoes.md`.
@@ -22,7 +22,8 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 | §5 Reconstrução (cônica + Zernike ordem 10, ou RBF/spline), traçado de raios, OPD, Zernike OSA ordem 6 | Implementado e verificado contra soluções analíticas |
 | §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows/macOS + versão HTML (Pyodide) | Implementado |
 | §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) + **página "Resultado completo"** (topografia axial/tangencial/refrativa/elevação + frente de onda + Zernike + tabelas, 1 folha A4) | Implementado |
-| §8 Suíte de verificação (68 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
+| **Ceratometria por zona** (0.4.0): K1 plano, K2 curvo e eixos em Ø 1–8 mm (e 2,4/3,3 mm), zonas 0–3 e 0–6 mm, zona pupilar e os 25 anéis, da potência axial medida pelo TMS; SimK e ACP do TMS recalculados e conferidos a cada exame; alerta de astigmatismo dependente da zona | Implementado e **conferido com 10 exames reais** (SimK ≤ 0,01 D, ACP 0,006 D) — `docs/convencoes.md`, D23 |
+| §8 Suíte de verificação (119 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, ceratometria, saídas) | Implementado — `pytest` |
 | §9 Estatística do piloto (repetibilidade, Bland–Altman com observações repetidas) + protocolo | Implementado (`tmsab stats`) |
 | §0 Inventário da estação / G0–G1 | **Fechados em 18/10/2026** com 14 exames reais de 3 pacientes — `docs/G0_resultado.md` (pendentes: tela "Sobre", olho de calibração, comparador) |
 | §9 Piloto com participantes e comparador | **Depende de dados reais** — `docs/protocolo_piloto.md` |
@@ -79,10 +80,13 @@ pytest                    # suíte de verificação
    (As duas automações podem ser desligadas nas caixas do painel esquerdo.)
 3. A aba **Resultado completo** mostra, numa folha A4, os 4 mapas topográficos (potência axial, tangencial,
    refrativa e elevação vs. esfera de melhor ajuste, com círculos de 3/6 mm e a pupila), a frente de onda total e de
-   alta ordem, os coeficientes de Zernike e as tabelas (geometria, astigmatismo, perfis, índices do TMS) —
+   alta ordem, os coeficientes de Zernike e as tabelas (geometria, astigmatismo, ceratometria por zona, perfis, índices
+   do TMS) —
    **Imprimir resultado completo…** manda direto para a impressora; a mesma página é a 1ª do PDF em `analises/`.
-   As demais abas detalham: *Importação* (diagnóstico, SimK/índices do TMS), *Geometria*, *Frente de onda*,
-   *Zernike*, *Comparação* (ex.: as duas capturas do mesmo olho), *Técnico*.
+   As demais abas detalham: *Ceratometria* (K1 plano, K2 curvo e eixos em todos os diâmetros, zonas 0–3/0–6 mm,
+   pupila, SimK do TMS e os 25 anéis, com gráficos por diâmetro e *Copiar tabela (TSV)*), *Importação* (diagnóstico,
+   SimK/índices do TMS), *Geometria*, *Frente de onda*, *Zernike*, *Comparação* (ex.: as duas capturas do mesmo olho),
+   *Técnico*.
 
 Linha de comando: `tmsab analyze "D:\TMS\<paciente>"` faz o mesmo (relatórios em `analises/`);
 `tmsab batch RAIZ --out SAIDA` processa várias pastas de pacientes e gera `resumo_longo.csv` para `tmsab stats`.
@@ -103,7 +107,7 @@ sintéticos (perfil v0) — e `tmsab.synthetic.write_export_folder_v1` gera past
 
 ```bash
 tmsab verify          # oval de Descartes (W≡0), esfera vs Seidel, traçado 3D vs referência meridional, sintéticos
-pytest -q             # 68 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
+pytest -q             # 119 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py + ceratometria)
 ```
 
 Resultados registrados: esfera R=7,8 mm → c(4,0)=+0,0204 µm a 3 mm (Seidel +0,0197); elipsoide Q=−1/n² →

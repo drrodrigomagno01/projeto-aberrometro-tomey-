@@ -1,6 +1,12 @@
 # Dicionário de campos — exportação "Data Tables" do TMS-4/4N
 
 > **Formato real verificado em 18/10/2026** (perfil `tms4_datatables_v1`): ver a tabela em `docs/G0_resultado.md`. O texto abaixo é o dicionário presumido original (perfil v0), mantido para os pacotes sintéticos e para registro das hipóteses.
+>
+> **Semântica das potências no formato real (conferida nos exames, 18/10/2026):** DIO = potência **axial**
+> 337,5/R_axial, R_axial = r·√(1+s²)/s (resíduo −0,013 D); ROC = potência **tangencial** em D (não raio em mm);
+> POW = potência refrativa por Snell com n′ 1,3375 e foco medido a partir do plano apical (resíduo 0,000 ± 0,004 D);
+> AVE = média do DIO e 2·média do RAD por anel, só pontos medidos (≤ 0,008 D / 0,001 mm). As hipóteses "DIO = 337,5/ROC"
+> e "ROC em mm" da tabela abaixo valem só para o formato presumido v0. O gerador sintético v1 grava as grandezas reais.
 
 
 Fonte documental: manual TMS-4N §3.11.5 e manual TMS-4 §3.11.5 (referências [1] e [2] do plano); guia Precilens [3].
