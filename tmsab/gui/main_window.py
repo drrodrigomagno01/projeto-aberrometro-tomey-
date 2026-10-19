@@ -13,10 +13,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
+from matplotlib.lines import Line2D
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QAction, QColor, QFont
+from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -50,9 +52,11 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..adapters import AdapterError, detect_profile, import_tms_bundle, list_exams, patient_display_name
-from ..model import Analysis, NormalizedExam, OpticalProfile, QualityConfig, ReconstructionConfig, WavefrontResult
+from ..keratometry import COLUNAS_TABELA, LEGENDA_TABELA, eixo_tabo, linhas_resumo
+from ..model import Analysis, KeratometryResult, NormalizedExam, OpticalProfile, QualityConfig, ReconstructionConfig, WavefrontResult
 from ..pipeline import default_profiles, profiles_for_exam
 from ..plots import compare_scale, figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
+from ..pupila import chord_mu_aparente, fmt_chord_mu
 from ..topo import ViewOptions, figure_tms_view, zone_axis_stats
 from ..reporting import export_all, report_lines
 from .canvas import MplCanvas
@@ -136,6 +140,62 @@ def _fmt(v, nd: int = 4, sign: bool = True) -> str:
         return f"{v:+.{nd}f}" if sign else f"{v:.{nd}f}"
     except TypeError:
         return "—"
+
+
+# ---- aba "Ceratometria": as 7 colunas do núcleo (COLUNAS_TABELA) + cobertura interpolada e vetor de potência
+K_COLUNAS = tuple(COLUNAS_TABELA) + ("% interp.", "J0 (D)", "J45 (D)")
+K_LEGENDA_COLUNAS_EXTRAS = ("% interp. = fração dos meridianos (na zona pupilar e nas zonas 0–d, da área) com pontos "
+                            "interpolados pelo aparelho; J0/J45 = vetor de potência do ΔK (Thibos), positivo = a favor "
+                            "da regra (J0 = −ΔK/2·cos 2·eixo K2).")
+K_SEPARADOR_ANEIS = "anéis medidos (Ø medido)"
+K_COR_K1, K_COR_K2 = "#2a78d6", "#eb6834"          # K1 plano / K2 curvo — as mesmas cores nos dois gráficos
+K_TINTA, K_TINTA_FRACA, K_GRADE, K_EIXO = "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
+
+
+def _fmt_j(v) -> str:
+    """Componente do vetor de potência com sinal e 2 casas, sem "−0.00" (arredonda antes de formatar)."""
+    if v is None or not np.isfinite(v):
+        return "—"
+    return f"{round(float(v), 2) + 0.0:+.2f}"
+
+
+def _cabecalho_k(titulo: str) -> str:
+    """Título de coluna em duas linhas: a tabela tem 10 colunas e divide a largura com os gráficos."""
+    return titulo.replace(" (", "\n(").replace("eixo ", "eixo\n").replace("% ", "%\n")
+
+
+def _zonas_das_linhas(kres: KeratometryResult, linhas: list[dict]) -> list:
+    """A KeratometryZone de cada linha de linhas_resumo(…, incluir_aneis=True) — None na linha do SimK do TMS —,
+    para as colunas extras e o realce do eixo. Casa por tipo, na ordem das listas do resultado (circunferências,
+    zonas 0–d, pupila, anéis); linha que não confere com a zona esperada fica sem extras (nunca com os de outra)."""
+    grupos: dict[str, list] = {}
+    todas = list(kres.zonas) + list(getattr(kres, "discos", None) or []) + list(kres.aneis)
+    for z in todas + ([kres.pupila] if kres.pupila is not None else []):
+        grupos.setdefault(z.tipo, []).append(z)
+    fontes = {tipo: iter(zs) for tipo, zs in grupos.items()}
+    out = []
+    for ln in linhas:
+        z = next(fontes[ln["tipo"]], None) if ln["tipo"] in fontes else None
+        if z is not None and (z.k1_plano_D != ln["k1"] or z.validity != ln["validity"]):
+            z = None
+        out.append(z)
+    return out
+
+
+def _diametro_simk(kres: KeratometryResult) -> float:
+    """Posição do SimK do TMS no eixo dos diâmetros: média dos diâmetros medidos dos anéis da regra (6–8)."""
+    d = [z.diametro_mm for z in kres.aneis if z.anel in kres.config.simk_aneis and z.diametro_mm]
+    return float(np.mean(d)) if d else 2.5
+
+
+def _estilo_eixos_k(ax) -> None:
+    ax.grid(True, color=K_GRADE, lw=0.6)
+    ax.set_axisbelow(True)
+    for lado in ("top", "right"):
+        ax.spines[lado].set_visible(False)
+    for lado in ("left", "bottom"):
+        ax.spines[lado].set_color(K_EIXO)
+    ax.tick_params(labelsize=7, colors=K_TINTA)
 
 
 class MainWindow(QMainWindow):
@@ -278,6 +338,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_summary_tab(), "Resultado completo")
         self.tabs.addTab(self._build_topo_tab(), "Topografia (TMS)")
+        self.tabs.addTab(self._build_keratometry_tab(), "Ceratometria")
         self.tabs.addTab(self._build_import_tab(), "Importação")
         self.tabs.addTab(self._build_geometry_tab(), "Geometria")
         self.tabs.addTab(self._build_wavefront_tab(), "Frente de onda")
@@ -287,6 +348,63 @@ class MainWindow(QMainWindow):
         return self.tabs
 
     # ---- abas
+    def _build_keratometry_tab(self) -> QWidget:
+        """K1 (plano), K2 (curvo) e eixos por zona, da potência axial do TMS (tmsab/keratometry.py).
+        Identificação só por exame/código de estudo: o nome do XREF fica restrito ao resultado completo."""
+        w = QWidget(); lay = QVBoxLayout(w)
+        self._k_ident = ""
+        self.k_state = QLabel("")
+        f = QFont(); f.setBold(True)
+        self.k_state.setFont(f); self.k_state.setWordWrap(True)
+        lay.addWidget(self.k_state)
+        box = QGroupBox("Potência axial do TMS (D) — K1 = meridiano mais plano, K2 = mais curvo; eixos TABO")
+        box.setMinimumHeight(118)                         # legenda + valor + subtexto de 2 linhas sem cortar
+        grid = QGridLayout(box)
+        grid.setContentsMargins(6, 2, 6, 2)
+        self.k_bn = {
+            "pupila": BigNumber("K na zona pupilar — K1 plano @ eixo / K2 curvo @ eixo"),
+            "simk": BigNumber("SimK do TMS (≈2.5 mm) — plano @ eixo / curvo @ eixo"),
+            "diametro": BigNumber("Diâmetro pupilar desta captura"),
+        }
+        for i, key in enumerate(("pupila", "simk", "diametro")):
+            self.k_bn[key].sub.setWordWrap(True)
+            self.k_bn[key].sub.setMinimumWidth(120)       # texto longo quebra a linha em vez de alargar a janela
+            grid.addWidget(self.k_bn[key], 0, i)
+            grid.setColumnStretch(i, 2 if key == "diametro" else 3)
+        lay.addWidget(box)
+        split = QSplitter(Qt.Horizontal)
+        self.k_table = QTableWidget(0, len(K_COLUNAS))
+        self.k_table.setHorizontalHeaderLabels([_cabecalho_k(c) for c in K_COLUNAS])
+        self.k_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.k_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)   # largura medida em _fill_k_table
+        self.k_table.setWordWrap(True)
+        self.k_table.verticalHeader().setVisible(False)
+        self.k_table.verticalHeader().setDefaultSectionSize(self.k_table.fontMetrics().height() + 8)
+        self.k_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.k_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        split.addWidget(self.k_table)
+        self.cv_kerato = MplCanvas(width=4.4, height=5.0)
+        split.addWidget(self.cv_kerato)
+        split.setStretchFactor(0, 3); split.setStretchFactor(1, 2)
+        split.setSizes([640, 420])
+        lay.addWidget(split, 1)
+        base = QHBoxLayout()
+        self.btn_k_copy = QPushButton("Copiar tabela (TSV)")
+        self.btn_k_copy.setToolTip("Copia a tabela como está na tela (colunas separadas por tabulação), para colar numa planilha. "
+                                   "O exame é identificado só pelo número e pelo código de estudo.")
+        self.btn_k_copy.clicked.connect(self.copy_keratometry_tsv)
+        self.btn_k_copy.setEnabled(False)
+        base.addWidget(self.btn_k_copy, 0, Qt.AlignTop)
+        self.k_legend = QLabel(LEGENDA_TABELA + " " + K_LEGENDA_COLUNAS_EXTRAS)
+        self.k_legend.setWordWrap(True)
+        self.k_legend.setStyleSheet("color:#444; font-size:10px;")
+        base.addWidget(self.k_legend, 1)
+        lay.addLayout(base)
+        self.k_notes = QPlainTextEdit(); self.k_notes.setReadOnly(True); self.k_notes.setMaximumHeight(96)
+        self.k_notes.setPlaceholderText("Conferência com o TMS (SimK e ACP) e notas da ceratometria (após calcular)")
+        lay.addWidget(self.k_notes)
+        return w
+
     def _build_import_tab(self) -> QWidget:
         w = QWidget(); lay = QVBoxLayout(w)
         self.import_state = QLabel("Nenhum pacote selecionado")
@@ -1003,10 +1121,12 @@ class MainWindow(QMainWindow):
         for b in self.bn.values():
             b.set_value(None)
         self.z_table.setRowCount(0)
+        self._clear_keratometry_tab("sem pacote selecionado")
 
     def refresh_all_tabs(self, st: PackageState) -> None:
         self.fill_summary_tab(st)
         self.fill_topo_tab(st)
+        self.fill_keratometry_tab(st)
         self.fill_import_tab(st)
         self.fill_geometry_tab(st)
         self.fill_wavefront_tab(st)
@@ -1040,10 +1160,288 @@ class MainWindow(QMainWindow):
         self.manifest_text.setPlainText(json.dumps(ex.bundle.manifest, ensure_ascii=False, indent=2) if ex.bundle.manifest else "(sem manifesto)")
         p = ex.pupil
         if p.state == "registrada":
+            diam = f"{p.diameter:.2f} mm" if p.diameter is not None and np.isfinite(p.diameter) else "—"
+            cm = chord_mu_aparente(p, ex.identity.eye)
             self.pupil_label.setText(f"Pupila: registrada\ncentro ({p.center_x:+.3f}, {p.center_y:+.3f}) mm\n"
-                                     f"diâmetro {p.diameter if p.diameter is not None else '—'} mm\nreferencial {p.frame}\nmétodo {p.method}")
+                                     f"diâmetro {diam}\nchord mu aparente {fmt_chord_mu(cm, curto=True)}\n"
+                                     f"referencial {p.frame}\nmétodo {p.method}")
         else:
             self.pupil_label.setText(f"Pupila: {p.state} — perfis centrados na pupila ficam bloqueados (a pupila não é preenchida com o vértice)")
+
+    # ---- ceratometria por zona
+    def _clear_keratometry_tab(self, canvas_msg: str, state: str = "", color: str = "#555") -> None:
+        """Sem números antigos: sem pacote, sem cálculo, desatualizado ou inválido."""
+        self._k_ident = ""
+        self.k_state.setText(state)
+        self.k_state.setStyleSheet(f"color:{color};")
+        for b in self.k_bn.values():
+            b.set_value(None)
+            b.setToolTip("")
+        self.k_table.clearSpans()
+        self.k_table.setRowCount(0)
+        self.k_notes.clear()
+        self.btn_k_copy.setEnabled(False)
+        self._k_canvas_msg(canvas_msg)
+
+    def fill_keratometry_tab(self, st: PackageState) -> None:
+        if st.exam is None:
+            self._clear_keratometry_tab("importação inválida", f"IMPORTAÇÃO INVÁLIDA — {st.message}", "#8B0000")
+            return
+        if st.analysis is None:
+            if st.status == "desatualizado":
+                self._clear_keratometry_tab("resultados desatualizados — recalcular",
+                                            "DESATUALIZADO — parâmetros alterados; recalcular", "#8a6d00")
+            elif st.status == "inválida":
+                self._clear_keratometry_tab("sem resultado", f"SEM RESULTADO — {st.message}", "#8B0000")
+            else:
+                self._clear_keratometry_tab("sem cálculo", f"Sem cálculo ({st.status}{': ' + st.message if st.message else ''}) "
+                                            "— a ceratometria aparece depois de 'Calcular'.")
+            return
+        kres = st.analysis.keratometry
+        if kres is None:
+            self._clear_keratometry_tab("ceratometria não calculada", "Ceratometria ausente nesta análise — recalcular.", "#8a6d00")
+            return
+        linhas = linhas_resumo(kres, incluir_aneis=True)
+        zonas = _zonas_das_linhas(kres, linhas)
+        qc = st.analysis.quality_config
+        ident = st.label.split(" — ")[0]          # exame, olho, captura e código de estudo (nunca o nome)
+        self._k_ident = f"{ident} · análise {st.analysis.analysis_id[:12]}"
+        alertas = list(getattr(kres, "alertas", None) or [])
+        if any("NÃO confere" in c for c in kres.conferencia):
+            self.k_state.setText(f"{ident} — ATENÇÃO: o SimK recalculado não confere com o XREF; verificar a leitura antes de usar os números")
+            self.k_state.setStyleSheet("color:#8B0000;")
+        elif not any(ln["disponivel"] for ln in linhas if ln["tipo"] != "simk_tms"):
+            motivo = next((n for n in kres.notes if n.startswith("ceratometria indisponível")), "nenhuma zona disponível")
+            self.k_state.setText(f"{ident} — {motivo} (motivos abaixo da tabela)")
+            self.k_state.setStyleSheet("color:#8B0000;")
+        elif alertas:                              # informativo (ex.: astigmatismo dependente da zona), não bloqueio
+            self.k_state.setText(f"{ident} — " + "; ".join(alertas))
+            self.k_state.setStyleSheet("color:#8a6d00;")
+        else:
+            self.k_state.setText(f"{ident} — ceratometria por zona: circunferências e anéis centrados no vértice; "
+                                 "zona pupilar = área dentro do contorno pupilar do TMS")
+            self.k_state.setStyleSheet("color:#1b5e20;")
+        self._fill_k_numbers(st.analysis, kres, linhas)
+        self._fill_k_table(linhas, zonas, qc)
+        self._fill_k_notes(kres, linhas)
+        self.btn_k_copy.setEnabled(self.k_table.rowCount() > 0)
+        try:
+            self._plot_keratometry(st.analysis, kres, qc)
+        except Exception as e:  # noqa: BLE001
+            self._k_canvas_msg(f"erro ao desenhar: {type(e).__name__}: {e}")
+
+    def _fill_k_numbers(self, analysis: Analysis, kres: KeratometryResult, linhas: list[dict]) -> None:
+        lp = next((ln for ln in linhas if ln["destaque"] == "pupila"), None)
+        if lp is not None and lp["disponivel"]:
+            t = lp["texto"]
+            sub = [f"ΔK {t[4]} D", f"Km {t[5]} D"]
+            if kres.pupila.eixo_pouco_definido:
+                sub.append("* eixo pouco definido")
+            if kres.pupila.marca_interpolados:
+                sub.append("† pontos interpolados")
+            self.k_bn["pupila"].set_value(f"{t[0]} @ {t[1]} / {t[2]} @ {t[3]}", " · ".join(sub))
+        else:                                       # rótulo curto; o motivo completo fica na dica e nas notas
+            self.k_bn["pupila"].set_value(None, lp["rotulo"] if lp is not None else "zona pupilar não calculada")
+        self.k_bn["pupila"].setToolTip("" if lp is None or lp["disponivel"] else (lp["motivo"] or lp["validity"]))
+        ls = next((ln for ln in linhas if ln["destaque"] == "referencia"), None)
+        if ls is not None:
+            t = ls["texto"]
+            self.k_bn["simk"].set_value(f"{t[0]} @ {t[1]} / {t[2]} @ {t[3]}", f"ΔK {t[4]} D (CYL) · no XREF: SimK2 = plano, SimK1 = curvo")
+        else:
+            self.k_bn["simk"].set_value(None, "sem índices do TMS (XREF) neste pacote")
+        p = analysis.pupil
+        if p.state == "registrada" and p.diameter is not None and np.isfinite(p.diameter):
+            sub = "pupila de entrada, sob a iluminação do Plácido"
+            cm = getattr(analysis, "chord_mu", None)
+            if cm is not None:                    # subtexto curto: cabe em 2 linhas na janela padrão
+                sub = f"chord mu aparente {fmt_chord_mu(cm, curto=True)}"
+            elif p.center_x is not None and p.center_y is not None:
+                sub = f"centro ({p.center_x:+.2f}, {p.center_y:+.2f}) mm do vértice · " + sub
+            self.k_bn["diametro"].set_value(f"{p.diameter:.2f} mm", sub)
+        else:
+            estado = {"ausente": "não registrada", "nao_verificada": "não verificada"}.get(p.state, p.state)
+            self.k_bn["diametro"].set_value(None, f"pupila {estado} nesta captura")
+
+    def _fill_k_table(self, linhas: list[dict], zonas: list, qc: QualityConfig) -> None:
+        t = self.k_table
+        t.clearSpans()
+        t.setRowCount(0)
+        cinza, cinza_claro = QColor("#6b6b6b"), QColor("#8a8a8a")
+        separador = False
+        linhas_longas = []
+        for ln, z in zip(linhas, zonas):
+            if ln["tipo"] == "anel" and not separador:
+                r = t.rowCount(); t.insertRow(r)
+                it = QTableWidgetItem(K_SEPARADOR_ANEIS)
+                it.setFlags(Qt.ItemIsEnabled)
+                fi = it.font(); fi.setItalic(True); it.setFont(fi)
+                it.setBackground(QColor("#f0efec")); it.setForeground(QColor(K_TINTA))
+                t.setItem(r, 0, it)
+                t.setSpan(r, 0, 1, t.columnCount())
+                separador = True
+            extras = ["—"] * 3
+            if z is not None and ln["disponivel"]:
+                extras = [f"{100.0 * z.fracao_interpolados:.0f}%", _fmt_j(z.j0_D), _fmt_j(z.j45_D)]
+            if not ln["disponivel"]:
+                dica = "indisponível: " + (ln["motivo"] or ln["validity"])
+            elif ln["destaque"] == "referencia":
+                dica = ("SimK lido do XREF do TMS (no aparelho SimK1 = curvo e SimK2 = plano; aqui K1 = plano, K2 = curvo); "
+                        "ΔK = CYL do TMS; não recalculado aqui (a conferência fica abaixo da tabela)")
+            else:
+                dica = "; ".join(z.notes) if z is not None else ""
+            r = t.rowCount(); t.insertRow(r)
+            for col, v in enumerate([ln["rotulo"]] + list(ln["texto"]) + extras):
+                it = QTableWidgetItem(v)
+                if col > 0:
+                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if dica:
+                    it.setToolTip(dica)
+                if ln["destaque"] == "pupila":
+                    it.setBackground(QColor("#dbe9f8"))
+                    fb = it.font(); fb.setBold(True); it.setFont(fb)
+                elif ln["destaque"] == "zona":         # zonas 0–d (média da área), à parte das circunferências
+                    it.setBackground(QColor("#eef4fb"))
+                if not ln["disponivel"]:
+                    it.setForeground(cinza_claro)
+                elif ln["destaque"] == "referencia":
+                    it.setForeground(cinza)
+                elif z is not None and z.eixo_pouco_definido and col in (2, 4):
+                    it.setForeground(cinza_claro)
+                    it.setToolTip(f"eixo pouco definido: ΔK < {qc.k_axis_min_cyl_D:.2f} D (o meridiano varia com a zona e entre capturas)")
+                t.setItem(r, col, it)
+            if ln["tipo"] == "simk_tms":
+                linhas_longas.append(r)
+        # coluna Zona na largura dos rótulos (menos o do SimK, que quebra em duas linhas): as 10 colunas cabem ao lado dos gráficos
+        fm, negrito = QFontMetrics(t.font()), QFont(t.font())
+        negrito.setBold(True)
+        fmb = QFontMetrics(negrito)
+        larg = [(fmb if ln["destaque"] == "pupila" else fm).horizontalAdvance(ln["rotulo"]) for ln in linhas if ln["tipo"] != "simk_tms"]
+        t.setColumnWidth(0, max(larg + [fm.horizontalAdvance("anéis medidos")]) + 16)
+        for r in linhas_longas:
+            t.resizeRowToContents(r)
+
+    def _fill_k_notes(self, kres: KeratometryResult, linhas: list[dict]) -> None:
+        alertas = list(getattr(kres, "alertas", None) or [])
+        out = ["Alertas (informativos, não são recomendação):"] + [f"  • {a}" for a in alertas] if alertas else []
+        out += ["Conferência com o TMS:"]
+        out += [f"  • {c}" for c in kres.conferencia] or ["  • sem SimK do TMS (XREF) neste pacote — nada a conferir"]
+        if kres.pupila is not None and kres.pupila.validity == "disponivel" and kres.pupila.notes:
+            out += ["Zona pupilar:"] + [f"  • {n}" for n in kres.pupila.notes]
+        por_motivo: dict[str, list[str]] = {}          # o mesmo motivo em várias linhas vira uma linha só
+        for ln in linhas:
+            if not ln["disponivel"]:
+                por_motivo.setdefault(ln["motivo"] or ln["validity"], []).append(ln["rotulo"])
+        if por_motivo:
+            out += ["Linhas indisponíveis (ausência, não zero):"] + [f"  • {', '.join(r)}: {m}" for m, r in por_motivo.items()]
+        notas = [n for n in kres.notes if n not in alertas]     # análises antigas gravavam o alerta também nas notas
+        if notas:
+            out += ["Notas:"] + [f"  • {n}" for n in notas]
+        self.k_notes.setPlainText("\n".join(out))
+
+    def _k_canvas_msg(self, msg: str) -> None:
+        """Mensagem no lugar dos gráficos; antes devolve a figura ao leiaute simples (o MplCanvas usa tight_layout)."""
+        self.cv_kerato.figure.set_layout_engine("none")
+        self.cv_kerato.clear(msg)
+
+    def _plot_keratometry(self, analysis: Analysis, kres: KeratometryResult, qc: QualityConfig) -> None:
+        """K1/K2 × diâmetro e eixo do K2 × diâmetro (circunferências e anéis; zonas de área ficam só na tabela).
+        Só números do núcleo; cores K1 = azul, K2 = laranja nos dois gráficos; legenda única embaixo."""
+        def serie(zs, attr):
+            x = np.array([z.diametro_mm if z.diametro_mm is not None else np.nan for z in zs], dtype=float)
+            y = np.array([getattr(z, attr) if z.validity == "disponivel" and getattr(z, attr) is not None else np.nan
+                          for z in zs], dtype=float)
+            return x, y
+
+        ks = np.concatenate([serie(zs, a)[1] for zs in (kres.zonas, kres.aneis) for a in ("k1_plano_D", "k2_curvo_D")])
+        if not np.isfinite(ks).any():
+            self._k_canvas_msg("nenhuma circunferência ou anel disponível para o gráfico (motivos abaixo da tabela)")
+            return
+        fig = self.cv_kerato.figure
+        fig.clear()
+        fig.set_layout_engine("constrained", h_pad=0.04, w_pad=0.04)   # refaz o leiaute a cada redimensionamento
+        ax1 = fig.add_subplot(2, 1, 1)
+        ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
+        for attr, cor in (("k1_plano_D", K_COR_K1), ("k2_curvo_D", K_COR_K2)):
+            x, y = serie(kres.zonas, attr)
+            ax1.plot(x, y, "-o", color=cor, lw=1.6, ms=5.5, mec="white", mew=0.9, zorder=3)
+            xa, ya = serie(kres.aneis, attr)
+            ax1.plot(xa, ya, linestyle="none", marker="o", ms=3.2, color=cor, alpha=0.55, mew=0, zorder=2)
+        # eixo do K2: vazado = eixo pouco definido (ΔK baixo); sem linha ligando (o eixo dá a volta em 180°)
+        for zs, grande in ((kres.zonas, True), (kres.aneis, False)):
+            disp = [z for z in zs if z.validity == "disponivel" and z.eixo_k2_deg is not None and z.diametro_mm is not None]
+            for pouco in (False, True):
+                sel = [z for z in disp if bool(z.eixo_pouco_definido) == pouco]
+                if not sel:
+                    continue
+                ax2.plot([z.diametro_mm for z in sel], [z.eixo_k2_deg for z in sel], linestyle="none", marker="o",
+                         ms=5.5 if grande else 3.8, mfc="white" if pouco else K_COR_K2,
+                         mec=K_COR_K2 if (pouco or not grande) else "white", mew=1.0 if pouco else (0.9 if grande else 0.0),
+                         alpha=1.0 if grande else 0.6, zorder=3 if grande else 2)
+        t = kres.simk_tms or {}
+        tem_simk = {"SimK1", "SimK2"} <= set(t)
+        if tem_simk:
+            ds = _diametro_simk(kres)
+            ax1.plot([ds, ds], [t["SimK2"], t["SimK1"]], linestyle="none", marker="D", ms=5, color=K_TINTA, mec="white", mew=0.8, zorder=4)
+            if t.get("SimK1 Ang.") is not None:
+                ax2.plot([ds], [eixo_tabo(t["SimK1 Ang."])], linestyle="none", marker="D", ms=5, color=K_TINTA, mec="white", mew=0.8, zorder=4)
+            ks = np.concatenate([ks, [t["SimK1"], t["SimK2"]]])
+        diams = [z.diametro_mm for z in list(kres.zonas) + list(kres.aneis) if z.diametro_mm]
+        xmax = max(9.0, (max(diams) + 0.3) if diams else 9.0)
+        dpup = kres.pupila.diametro_mm if kres.pupila is not None else None
+        if analysis.pupil.state == "registrada" and dpup and np.isfinite(dpup):
+            for ax in (ax1, ax2):
+                ax.axvline(dpup, color=K_TINTA, lw=1.0, ls=(0, (4, 3)), zorder=1)
+            a_direita = dpup < 0.7 * xmax
+            ax1.text(dpup + (0.1 if a_direita else -0.1), 0.97, f"pupila Ø {dpup:.2f} mm", transform=ax1.get_xaxis_transform(),
+                     ha="left" if a_direita else "right", va="top", fontsize=7.5, color=K_TINTA)
+        k = ks[np.isfinite(ks)]
+        meio, meia = 0.5 * (k.min() + k.max()), 0.5 * max(k.max() - k.min(), 1.0) * 1.15   # escala mínima de 1 D
+        ax1.set_ylim(meio - meia, meio + meia)
+        ax1.set_xlim(0.0, xmax)
+        ax2.set_ylim(0.0, 180.0)
+        ax2.set_yticks([0, 45, 90, 135, 180])
+        ax1.set_title("K1 plano e K2 curvo por diâmetro", fontsize=9, color="#0b0b0b", loc="left")
+        ax2.set_title("Eixo do K2 (meridiano mais curvo)", fontsize=9, color="#0b0b0b", loc="left")
+        ax1.set_ylabel("potência axial (D)", fontsize=8, color=K_TINTA)
+        ax2.set_ylabel("eixo do K2 (° TABO)", fontsize=8, color=K_TINTA)
+        ax2.set_xlabel("diâmetro (mm): circunferência centrada no vértice ou anel (Ø medido)", fontsize=8, color=K_TINTA)
+        ax1.tick_params(labelbottom=False)
+        for ax in (ax1, ax2):
+            _estilo_eixos_k(ax)
+        alcas = [Line2D([], [], color=K_COR_K1, lw=1.6, marker="o", ms=5, mec="white", label="K1 plano"),
+                 Line2D([], [], color=K_COR_K2, lw=1.6, marker="o", ms=5, mec="white", label="K2 curvo"),
+                 Line2D([], [], color=K_TINTA_FRACA, ls="none", marker="o", ms=3.2, mew=0, label="anel (Ø medido)"),
+                 Line2D([], [], color=K_TINTA_FRACA, ls="none", marker="o", ms=5, mfc="white", mew=1.0,
+                        label=f"eixo pouco definido (ΔK < {qc.k_axis_min_cyl_D:.2f} D)")]
+        if tem_simk:
+            alcas.append(Line2D([], [], color=K_TINTA, ls="none", marker="D", ms=4.5, mec="white", label="SimK do TMS"))
+        fig.legend(handles=alcas, loc="outside lower center", ncol=2, fontsize=7, frameon=False, labelcolor=K_TINTA,
+                   handletextpad=0.4, columnspacing=1.0)
+        self.cv_kerato.canvas.draw_idle()
+
+    def keratometry_tsv(self) -> str:
+        """A tabela da aba Ceratometria como está na tela, em texto separado por tabulação (sem nome)."""
+        t = self.k_table
+        if t.rowCount() == 0:
+            return ""
+        out = [f"Ceratometria — {self._k_ident}"] if self._k_ident else []
+        out.append("\t".join(K_COLUNAS))
+        for r in range(t.rowCount()):
+            cells = [t.item(r, c).text() if t.item(r, c) is not None else "" for c in range(t.columnCount())]
+            out.append("\t".join(cells).rstrip("\t"))
+        out.append(LEGENDA_TABELA)
+        out.append(K_LEGENDA_COLUNAS_EXTRAS)
+        return "\n".join(out) + "\n"
+
+    @Slot()
+    def copy_keratometry_tsv(self) -> str:
+        tsv = self.keratometry_tsv()
+        if not tsv:
+            self.statusBar().showMessage("Nada a copiar: calcule o exame para ver a ceratometria.", 6000)
+            return ""
+        QApplication.clipboard().setText(tsv)
+        self.statusBar().showMessage(f"Tabela de ceratometria copiada ({self.k_table.rowCount()} linhas, separadas por tabulação).", 8000)
+        return tsv
 
     def fill_geometry_tab(self, st: PackageState) -> None:
         if st.exam is None:

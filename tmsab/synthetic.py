@@ -104,14 +104,23 @@ def sample_placido(spec: SyntheticSpec, surface: Surface):
     zr2 = gx2 * np.cos(theta)[None, :] + gy2 * np.sin(theta)[None, :]
     zrr = (zr2 - zr) / dr
     roc = (1 + zr**2) ** 1.5 / zrr
-    dio = 337.5 / roc
+    dio = 337.5 / roc                    # formato PRESUMIDO (v0): 337,5/ROC instantâneo
+    # Grandezas do formato REAL (v1), conferidas nos exames do TMS-4N (docs/G0_resultado.md):
+    # DIO = potência AXIAL 337,5/R_axial, R_axial = r·√(1+z_r²)/z_r; ROC = potência TANGENCIAL (D);
+    # POW = potência refrativa por Snell (n' = 1,3375), foco medido a partir do plano apical.
+    dio_axial = 337.5 * zr / (r * np.sqrt(1.0 + zr**2))
+    pot_tangencial = 337.5 * zrr / (1.0 + zr**2) ** 1.5
+    phi = np.arctan(zr)
+    phi_l = np.arcsin(np.sin(phi) / 1.3375)
+    pot_refrativa = 1337.5 / (z + r / np.tan(phi - phi_l))
     state = np.zeros(r.shape, dtype=np.int8)
     if spec.lid_gap_from_ring is not None:
         ang = np.degrees(theta)
         sup = np.abs(((ang - 90.0 + 180.0) % 360.0) - 180.0) <= spec.lid_gap_half_angle_deg
         for j in range(spec.lid_gap_from_ring, spec.n_rings):
             state[j, sup] = 1 if spec.lid_gap_as_interpolated else 2
-    return {"theta_deg": np.degrees(theta), "r": r, "z": z, "roc": roc, "dio": dio, "state": state}
+    return {"theta_deg": np.degrees(theta), "r": r, "z": z, "roc": roc, "dio": dio, "state": state,
+            "dio_axial": dio_axial, "pot_tangencial": pot_tangencial, "pot_refrativa": pot_refrativa}
 
 
 def _fmt(v: float, decimals: int) -> str:
@@ -186,6 +195,34 @@ def standard_cases() -> list[SyntheticSpec]:
 # ---------------------------------------------------------------------------
 # Formato REAL do TMS-4N (perfil v1): HIT_1_<exame>.dat etc., 256 linhas x 34 colunas, XREF.dat
 # ---------------------------------------------------------------------------
+def _acp_sintetico(dio: np.ndarray, state: np.ndarray, r: np.ndarray, r_edge: np.ndarray) -> float:
+    """ACP do XREF: média do DIO das amostras com r ≤ borda pupilar (mesmo meridiano), peso r·Δr nominal."""
+    nr = r.shape[0]
+    dr = np.abs(np.gradient(np.nanmean(r, axis=1))) if nr > 1 else np.ones(nr)
+    borda = np.where(r_edge > 0, r_edge, np.nan)[None, :]
+    dentro = (r <= borda) & (state != 2)
+    peso = np.where(dentro, r * dr[:, None], 0.0)
+    return float(np.sum(peso * dio) / np.sum(peso)) if peso.sum() > 0 else 0.0
+def _fourier_sintetico(dio: np.ndarray, state: np.ndarray, r: np.ndarray, theta_deg: np.ndarray, d_max: float):
+    """Fourier do XREF ("3mm/6mm Spherical Equ., Reg. Astig., Reg. Astig. Axis"): média vetorial do 2º harmônico do
+    DIO nos anéis com diâmetro ≤ d_max; Reg. Astig. = AMPLITUDE (metade do cilindro), eixo = meridiano curvo (como
+    nos exames reais)."""
+    from .keratometry import eixo_tabo, fourier_fit
+    th = np.radians(theta_deg)
+    a0s, a2s, b2s = [], [], []
+    for j in range(dio.shape[0]):
+        ok = state[j] != 2
+        if not ok.any() or 2.0 * float(np.mean(r[j][ok])) > d_max:
+            continue
+        f = fourier_fit(th[ok], dio[j][ok])
+        if f:
+            a0s.append(f["a0"]); a2s.append(f["a2"]); b2s.append(f["b2"])
+    if not a0s:
+        return 0.0, 0.0, 0.0
+    a2, b2 = float(np.mean(a2s)), float(np.mean(b2s))
+    return float(np.mean(a0s)), float(np.hypot(a2, b2)), eixo_tabo(0.5 * np.degrees(np.arctan2(b2, a2)))
+
+
 def write_export_folder_v1(specs: list[SyntheticSpec], out_dir: str, first_exam: int = 90001,
                            patient_name: tuple[str, str] = ("SINTETICO", "PACIENTE"), append: bool = False,
                            date_str: str = "17/06/2026") -> str:
@@ -213,8 +250,8 @@ def write_export_folder_v1(specs: list[SyntheticSpec], out_dir: str, first_exam:
             lines = [",".join(f"{v:9.4f}" for v in row) for row in full]
             return "\r\n".join(lines) + "\r\n"
 
-        for role, arr in (("HIT", s["z"]), ("RAD", s["r"]), ("DIO", s["dio"]), ("ROC", s["dio"] * 0.98), ("POW", s["dio"] * 1.02),
-                          ("RNG", s["r"] * 44.0)):
+        for role, arr in (("HIT", s["z"]), ("RAD", s["r"]), ("DIO", s["dio_axial"]), ("ROC", s["pot_tangencial"]),
+                          ("POW", s["pot_refrativa"]), ("RNG", s["r"] * 44.0)):
             with open(os.path.join(out_dir, f"{role}_1_{exam}.dat"), "w", encoding="ascii", newline="") as fh:
                 fh.write(table(arr, s["state"]))
         # PUP: raio da borda por ângulo, centro deslocado (pupil_center) e alguns pontos interpolados (negativos)
@@ -225,24 +262,43 @@ def write_export_folder_v1(specs: list[SyntheticSpec], out_dir: str, first_exam:
         b = cx * np.cos(th) + cy * np.sin(th)
         r_edge = b + np.sqrt(np.maximum(R**2 - (cx**2 + cy**2) + b**2, 0.0))
         r_edge = np.round(r_edge, 2)
-        r_edge[100:106] *= -1
+        if not spec.pupil_registered:
+            r_edge = np.zeros_like(r_edge)      # como no exame real em que o TMS não detectou a borda (256 zeros)
+        else:
+            r_edge[100:106] *= -1
         with open(os.path.join(out_dir, f"PUP_1_{exam}.dat"), "w", encoding="ascii", newline="") as fh:
             fh.write("\r\n".join(f"{v:.2f}" for v in r_edge) + "\r\n")
-        # AVE: potência média e diâmetro médio por anel (34 linhas)
+        # AVE: potência (DIO) média e diâmetro médio por anel (34 linhas), só com pontos MEDIDOS — como o TMS
+        dio_ax, st = s["dio_axial"], s["state"]
         ave = []
         for j in range(ncols):
-            if j < nr:
-                ave.append(f"{np.nanmean(s['dio'][j]):9.4f},{2*np.nanmean(s['r'][j]):9.4f}")
+            if j < nr and (st[j] == 0).any():
+                med = st[j] == 0
+                ave.append(f"{np.mean(dio_ax[j][med]):9.4f},{2*np.mean(s['r'][j][med]):9.4f}")
             else:
                 ave.append(f"{0.0:9.4f},{0.0:9.4f}")
         with open(os.path.join(out_dir, f"AVE_1_{exam}.dat"), "w", encoding="ascii", newline="") as fh:
             fh.write("\r\n".join(ave) + "\r\n")
+        # XREF: SimK/MinK/CYL pela regra do TMS-4N sobre o DIO axial, ACP (média por área na pupila) e Fourier 3/6 mm
+        # (equivalente esférico, amplitude e eixo do 2º harmônico); os demais índices de Klyce/Fourier continuam
+        # constantes (não são verdade de teste).
+        from .keratometry import eixo_tabo, simk_regra_tms
+        f3 = _fourier_sintetico(np.round(dio_ax, 4), st, s["r"], s["theta_deg"], 3.2)
+        f6 = _fourier_sintetico(np.round(dio_ax, 4), st, s["r"], s["theta_deg"], 6.2)
+        sk = simk_regra_tms(np.round(dio_ax, 4), st, s["theta_deg"])
+        if sk is None:                         # regra sem meridianos completos: SimK coerente com o Fourier 3 mm dos dados
+            sk = {"k2_curvo_D": f3[0] + f3[1], "eixo_k2_deg": f3[2], "k1_plano_D": f3[0] - f3[1],
+                  "eixo_k1_deg": eixo_tabo(f3[2] + 90.0), "mink_D": f3[0] - f3[1], "eixo_mink_deg": eixo_tabo(f3[2] + 90.0)}
+        k_curvo, k_plano = round(sk["k2_curvo_D"], 2), round(sk["k1_plano_D"], 2)
+        acp = _acp_sintetico(dio_ax, st, s["r"], np.abs(r_edge)) if spec.pupil_registered else 0.0
         hh = 9
         mm = 30 + i
         xref_rows.append(
             f"1,{patient_name[0]} ,{patient_name[1]} ,0,,{date_str} {hh:02d}:{mm:02d}:00,{spec.eye},C:\\\\Tomey\\\\Tms\\\\NewExams\\\\{exam}.tms,"
-            f"44.70,{(spec.axis_deg + 90) % 180:.0f},44.30,{spec.axis_deg % 180:.0f},44.20,165,{abs(spec.cyl_D):.2f},44.44,0.06,0.22,0.33,0.39,1.53,0.80,0.09,0.00,0.34,0.98,0.00,0.00,"
-            f"44.54,0.20,57.30,0.16,172.84,0.13,44.45,0.21,57.61,0.24,166.56,0.15, 0.29, 0.31,{spec.Q:.2f}, 0.11, 0.89"
+            f"{k_curvo:.2f},{round(sk['eixo_k2_deg']) % 180:.0f},{k_plano:.2f},{round(sk['eixo_k1_deg']) % 180:.0f},"
+            f"{sk['mink_D']:.2f},{round(sk['eixo_mink_deg']) % 180:.0f},{k_curvo - k_plano:.2f},{acp:.2f},"
+            f"0.06,0.22,0.33,0.39,1.53,0.80,0.09,0.00,0.34,0.98,0.00,0.00,"
+            f"{f3[0]:.2f},{f3[1]:.2f},{f3[2]:.2f},0.16,172.84,0.13,{f6[0]:.2f},{f6[1]:.2f},{f6[2]:.2f},0.24,166.56,0.15, 0.29, 0.31,{spec.Q:.2f}, 0.11, 0.89"
         )
     header1 = ",,,Patient Record,,,,,,,,,,,,,,,Corneal Statistics,,,,,,,,,,,,,,,Fourier Index Standard,,,,,,,Eccentricity,"
     header2 = ("File REF.,Last Name,First Name,-----,ID,Date&Time,Eye,Filename,SimK1,SimK1 Ang.,SimK2,SimK2 Ang.,MinK,MinK Ang.,CYL,ACP,"

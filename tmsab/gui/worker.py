@@ -71,7 +71,7 @@ class AnalysisWorker(QThread):
                 pr = self.profile_request
                 profiles = profiles_for_exam(exam, pr["diameters"], pr["centers"], pr["order"],
                                              measured_pupil=pr.get("measured_pupil", True), reference=pr.get("reference", "paraxial_media_principais"))
-            steps = len(profiles) + 3
+            steps = len(profiles) + 4           # validação, reconstrução, perfis, ceratometria, montagem
             counter = {"k": 0}
 
             def _progress(msg: str, _base=base, _span=span, _label=label):

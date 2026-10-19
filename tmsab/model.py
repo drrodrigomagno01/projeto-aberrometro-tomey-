@@ -225,7 +225,41 @@ class QualityConfig:
     max_surface_residual_rms_um: float = 1.0
     max_condition_number: float = 1e6
     max_invalid_ray_fraction: float = 0.01
+    # ceratometria por zona (tmsab/keratometry.py)
+    k_min_meridian_fraction: float = 0.85    # fração de meridianos (ou da área da pupila) com dados utilizáveis
+    k_max_missing_sector_deg: float = 20.0   # maior setor angular contíguo sem dados na circunferência/anel
+    k_axis_min_cyl_D: float = 0.50           # abaixo disto o eixo é marcado "pouco definido" (nota, não bloqueio)
+    k_interp_mark_fraction: float = 0.10     # fração de meridianos com pontos interpolados pelo aparelho que gera a marca †
+    k_simk_tol_D: float = 0.05               # conferência SimK recalculado × XREF (potência): pega erro de leitura grosseiro
+    k_simk_axis_tol_deg: float = 5.0         # idem (eixo), aplicada só com cilindro ≥ k_eixo_min_cyl_D
+    k_eixo_min_cyl_D: float = 0.75           # eixos só são comparados (SimK × XREF, zona × pupila) acima deste ΔK
+    k_zona_alerta_dif_D: float = 0.50        # alerta "astigmatismo dependente da zona": diferença vetorial 0–3 mm × pupila
+    k_zona_alerta_eixo_deg: float = 10.0     # idem, diferença de eixo (com ΔK ≥ k_eixo_min_cyl_D nas duas zonas)
     provisional: bool = True
+
+
+@dataclass
+class KeratometryConfig:
+    """Ceratometria por zona a partir da potência axial do TMS (definições em tmsab/keratometry.py e
+    docs/convencoes.md). Entra no identificador do cálculo: mudar zonas ou método gera nova análise."""
+
+    fonte: str = "DIO"                           # potência axial (sagital) do TMS, convenção 337,5/R_axial
+    indice_ceratometrico: float = 1.3375
+    metodo: str = "fourier_harmonicos_0a2"       # P(θ) = a0 + 1º e 2º harmônicos, mínimos quadrados
+    centro: str = "vertice"                      # circunferências, zonas e anéis centrados no vértice topográfico
+    # circunferências ("anel" de diâmetro d, como um ceratômetro): 2,4 mm ≈ anel dos biômetros ópticos (IOLMaster
+    # 2,3–2,5; Lenstar 2,3; AL-Scan 2,4) e do SimK; 3,3 mm = anel externo do AL-Scan, que previu melhor o astigmatismo
+    # residual de LIO tórica que o de 2,4 mm (Chang 2022)
+    diametros_mm: tuple[float, ...] = (1.0, 2.0, 2.4, 3.0, 3.3, 4.0, 5.0, 6.0, 7.0, 8.0)
+    diametros_resumo_mm: tuple[float, ...] = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)   # os que vão à folha A4
+    # zonas (disco 0–d, média ponderada pela área, como Pentacam/Atlas): 0–3 mm centrada no vértice teve o menor
+    # erro de astigmatismo em tórica (Meng 2021); 0–6 mm ≈ zona óptica da refrativa
+    zonas_disco_mm: tuple[float, ...] = (3.0, 6.0)
+    zonas_disco_resumo_mm: tuple[float, ...] = (3.0,)
+    aneis_medidos: bool = True                   # uma linha por anel do Plácido, no diâmetro medido (2·RAD médio)
+    zona_pupilar: str = "area_contorno_PUP"      # "area_contorno_PUP" | "nenhuma"
+    simk_aneis: tuple[int, ...] = (6, 7, 8)      # regra do SimK do TMS-4N (anéis 1-based, ≈ Ø 2,5 mm)
+    versao: str = "ceratometria_v1"
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +305,56 @@ class WavefrontResult:
 
 
 @dataclass
+class KeratometryZone:
+    """Uma linha da ceratometria: circunferência de diâmetro fixo, anel medido ou zona pupilar.
+
+    K1 = meridiano mais PLANO e K2 = mais CURVO (convenção da biometria). Atenção: no XREF do TMS,
+    SimK1 é o curvo. Eixos em graus TABO (0° às 3 h, anti-horário na vista do examinador), 1–180;
+    eixo do K1 = eixo do K2 + 90° (2º harmônico de Fourier).
+    """
+
+    rotulo: str
+    tipo: str                                    # "circunferencia" | "zona" (disco 0–d) | "anel" | "pupila"
+    diametro_mm: Optional[float]
+    validity: str                                # "disponivel" | "indisponivel" | "invalida"
+    block_reasons: list[str] = field(default_factory=list)
+    k1_plano_D: Optional[float] = None
+    eixo_k1_deg: Optional[float] = None
+    k2_curvo_D: Optional[float] = None
+    eixo_k2_deg: Optional[float] = None
+    delta_k_D: Optional[float] = None            # K2 − K1 (cilindro ceratométrico)
+    k_medio_D: Optional[float] = None            # a0 do ajuste (média em θ)
+    j0_D: Optional[float] = None                 # vetor de potência (Thibos), positivo = a favor da regra
+    j45_D: Optional[float] = None
+    assimetria_D: Optional[float] = None         # amplitude do 1º harmônico (assimetria/descentração)
+    eixo_assimetria_deg: Optional[float] = None  # meridiano (0–360°) do lado mais curvo do 1º harmônico
+    irregularidade_D: Optional[float] = None     # RMS do resíduo após os harmônicos 0–2
+    anel: Optional[int] = None                   # anel do Plácido (1-based), quando tipo == "anel"
+    centro_xy: Optional[tuple[float, float]] = None
+    n_amostras: int = 0
+    fracao_cobertura: float = 0.0                # meridianos com dados (zonas e pupila: com dados até a borda)
+    fracao_interpolados: float = 0.0             # parte da cobertura que usa pontos interpolados pelo aparelho
+    maior_setor_sem_dados_deg: float = 0.0
+    eixo_pouco_definido: bool = False
+    marca_interpolados: bool = False
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class KeratometryResult:
+    config: KeratometryConfig
+    zonas: list[KeratometryZone] = field(default_factory=list)      # circunferências de diâmetro fixo
+    discos: list[KeratometryZone] = field(default_factory=list)     # zonas 0–d (média ponderada pela área)
+    aneis: list[KeratometryZone] = field(default_factory=list)      # anéis medidos (diâmetro medido)
+    pupila: Optional[KeratometryZone] = None                        # área dentro do contorno pupilar
+    simk_calculado: Optional[dict[str, float]] = None               # regra do TMS-4N recalculada (K1 = plano)
+    simk_tms: Optional[dict[str, float]] = None                     # valores do XREF (lista de colunas permitidas)
+    conferencia: list[str] = field(default_factory=list)            # SimK/ACP recalculados × TMS
+    alertas: list[str] = field(default_factory=list)                # informativos (ex.: astigmatismo dependente da zona)
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
 class GeometrySummary:
     method: str
     fit_radius_mm: float
@@ -287,6 +371,17 @@ class GeometrySummary:
     central_gap_mm: float
     outer_radius_mm: float
     measured_fraction: float
+
+
+@dataclass
+class ApparentChordMu:
+    """Chord mu aparente (tmsab/pupila.py): centro da pupila de entrada desta captura em relação ao vértice do TMS."""
+    distancia_mm: float
+    x_mm: float                                  # referencial do exame: vista do examinador, +x à direita da imagem
+    y_mm: float                                  # +y superior
+    nasal_mm: Optional[float]                    # + nasal, − temporal (None se o olho não for conhecido)
+    superior_mm: float                           # + superior, − inferior
+    diametro_pupila_mm: Optional[float]          # pupila desta captura (iluminação do Plácido)
 
 
 @dataclass
@@ -307,6 +402,8 @@ class Analysis:
     import_diagnostics: list[str]
     warnings: list[str]
     purpose: str = "Aberrometria corneana anterior calculada — estágio de pesquisa"
+    keratometry: Optional[KeratometryResult] = None    # a partir da 0.4.0; ausente em JSON antigo = não calculado
+    chord_mu: Optional[ApparentChordMu] = None         # a partir da 0.4.0; None = pupila não detectada
 
 
 # ---------------------------------------------------------------------------

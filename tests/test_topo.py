@@ -46,8 +46,10 @@ def test_profiles_for_exam_includes_measured_pupil(toric):
     assert sum(1 for w in an.wavefronts if w.profile.center_mode == "pupila" and abs(w.profile.diameter_mm - 4.0) < 0.05) == 1
     wf = select_profile(an, ViewOptions(pupil_mm=5.0, center="pupila"))
     assert wf.profile.diameter_mm == 5.0 and wf.profile.center_mode == "pupila"
-    wf2 = select_profile(an, ViewOptions(pupil_mm=None, center="vertice"))    # pupila medida 4,0 mm → vértice 4 mm
-    assert wf2.profile.center_mode == "vertice" and abs(wf2.profile.diameter_mm - 4.0) < 0.6
+    wf2 = select_profile(an, ViewOptions(pupil_mm=None, center="pupila"))     # "medida": pupila 4,0 mm centrada na pupila
+    assert wf2.profile.center_mode == "pupila" and abs(wf2.profile.diameter_mm - 4.0) < 0.05
+    wf3 = select_profile(an, ViewOptions(pupil_mm=None, center="vertice"))    # padrão da página: 6 mm no vértice
+    assert wf3.profile.center_mode == "vertice" and wf3.profile.diameter_mm == 6.0
 
 
 def test_draw_views(toric):

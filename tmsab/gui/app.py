@@ -52,6 +52,22 @@ def run_smoke(app: QApplication, win, synth_dir: str | None, screenshot: str | N
             app.processEvents()
         assert win.z_table.rowCount() > 0, "tabela de Zernike vazia"
         assert "analysis_id" in win.tech_text.toPlainText()
+        # abas "Topografia (TMS)" (2ª) e "Ceratometria" (3ª): tabela por zona de analysis.keratometry; pacote v0 sem XREF -> sem SimK do TMS
+        nomes = [win.tabs.tabText(i) for i in range(win.tabs.count())]
+        assert nomes[1] == "Topografia (TMS)" and nomes[2] == "Ceratometria", f"abas fora de ordem: {nomes}"
+        assert len(win.cv_topo.figure.axes) >= 1, "aba de topografia não desenhada"
+        win.vg_kind.buttons()[1].click(); app.processEvents()          # botão "Tangencial" redesenha
+        assert "Astig Stats" in win.topo_text.toPlainText()
+        kres = st0.analysis.keratometry
+        assert kres is not None, "ceratometria ausente na análise"
+        rotulos = [win.k_table.item(r, 0).text() for r in range(win.k_table.rowCount()) if win.k_table.item(r, 0) is not None]
+        assert win.k_table.rowCount() >= len(kres.zonas) + len(kres.aneis), f"tabela de ceratometria com {win.k_table.rowCount()} linhas"
+        assert any(r.startswith("Ø 3 mm") for r in rotulos) and any(r.startswith("anel 1 ") for r in rotulos), rotulos
+        assert win.k_bn["pupila"].val.text() != "—", f"K na zona pupilar vazio: {win.k_bn['pupila'].sub.text()}"
+        tsv = win.keratometry_tsv()
+        assert tsv.splitlines()[1].split("\t")[:3] == ["Zona", "K1 plano (D)", "eixo K1"], tsv[:200]
+        if app.platformName() == "offscreen":   # área de transferência só sem tela (não mexe na do usuário)
+            assert win.copy_keratometry_tsv() == tsv and QApplication.clipboard().text() == tsv, "cópia TSV falhou"
         # comparação A × B no primeiro perfil disponível
         win.refresh_compare_controls()
         win.cmp_a.setCurrentIndex(win.cmp_a.findData(keys[0]))
@@ -75,6 +91,7 @@ def run_smoke(app: QApplication, win, synth_dir: str | None, screenshot: str | N
         app.processEvents()
         assert win.packages[keys[0]].analysis is None and win.packages[keys[0]].status == "desatualizado"
         assert win.bn["sa"].val.text() == "—"
+        assert win.k_table.rowCount() == 0 and win.k_bn["pupila"].val.text() == "—", "ceratometria antiga ainda na tela"
         win.order_spin.setValue(6)
         # caminho com thread (worker + sinais), com espera limitada
         from PySide6.QtCore import QEventLoop, QTimer
@@ -95,7 +112,8 @@ def run_smoke(app: QApplication, win, synth_dir: str | None, screenshot: str | N
         for key in keys:
             assert win.packages[key].status == "calculado", f"{key}: {win.packages[key].status} {win.packages[key].message}"
         win.list.setCurrentRow(0)
-        win.tabs.setCurrentIndex(2)
+        aba_wf = next(i for i in range(win.tabs.count()) if win.tabs.tabText(i) == "Frente de onda")   # pelo nome: a ordem das abas muda
+        win.tabs.setCurrentIndex(aba_wf)
         win.profile_combo.setCurrentIndex(min(1, win.profile_combo.count() - 1))
         app.processEvents()
         win.resize(1366, 768)
@@ -109,7 +127,7 @@ def run_smoke(app: QApplication, win, synth_dir: str | None, screenshot: str | N
                 win.tabs.setCurrentIndex(i)
                 app.processEvents()
                 win.grab().save(f"{base}_tab{i}{ext}")
-            win.tabs.setCurrentIndex(2)
+            win.tabs.setCurrentIndex(aba_wf)
             app.processEvents()
         print(f"smoke OK — {len(keys)} pacotes, {len(st0.analysis.wavefronts)} perfis, exportação em {out}")
         return 0

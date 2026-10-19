@@ -3,8 +3,9 @@
 Programa de computador (Windows; roda também em macOS/Linux) que transforma a exportação numérica
 ("Data Tables") do topógrafo **Tomey TMS-4 / TMS-4N** em estimativas reprodutíveis da **frente de onda da
 superfície anterior da córnea**: mapa de frente de onda, coeficientes de Zernike (OSA), aberração esférica
-primária, coma, trefoil e RMS de alta ordem — sempre vinculados à abertura, ao centro, ao modelo óptico e às
-versões usadas, com controle de qualidade e proveniência.
+primária, coma, trefoil e RMS de alta ordem; e, desde a 0.4.0, a **ceratometria por zona** (K1/K2 e eixos por
+diâmetro, da potência axial medida pelo TMS) e o **chord mu aparente** — sempre vinculados à abertura, ao centro, ao
+modelo óptico e às versões usadas, com controle de qualidade e proveniência.
 
 Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/2026): seções 1–15 e apêndices.
 
@@ -22,7 +23,9 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 | §5 Reconstrução (cônica + Zernike ordem 10, ou RBF/spline), traçado de raios, OPD, Zernike OSA ordem 6 | Implementado e verificado contra soluções analíticas |
 | §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows/macOS + versão HTML (Pyodide) | Implementado |
 | §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) + **página "Resultado completo"** (topografia axial/tangencial/refrativa/elevação + frente de onda + Zernike + tabelas, 1 folha A4) | Implementado |
-| §8 Suíte de verificação (73 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, saídas) | Implementado — `pytest` |
+| **Ceratometria por zona** (0.4.0): K1 plano, K2 curvo e eixos em Ø 1–8 mm (e 2,4/3,3 mm), zonas 0–3 e 0–6 mm, zona pupilar e os 25 anéis, da potência axial medida pelo TMS; SimK e ACP do TMS recalculados e conferidos a cada exame; alerta de astigmatismo dependente da zona | Implementado e **conferido com 10 exames reais** (SimK a ≤ 0,01 D em 9 de 10 exames e 0,03 D no 10º (27204); Km da zona pupilar × ACP: erro médio 0,006 D (máx. 0,017) nos 9 com pupila detectada) — `docs/convencoes.md`, D23 |
+| **Topografia no estilo do TMS** (0.4.0): escala Standard 40,5–53,0 D (paleta do aparelho), transferidor, meridianos íngreme/plano com as potências a 3/5/7 mm (*Astig Stats*), pupila; **botões de visualização** (mapa, escala, zona, diâmetro pupilar 3/4/5/6 mm ou medido, centro) no programa e no HTML | Implementado — D24/D25 |
+| §8 Suíte de verificação (178 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, ceratometria, topografia, saídas) | Implementado — `pytest` |
 | §9 Estatística do piloto (repetibilidade, Bland–Altman com observações repetidas) + protocolo | Implementado (`tmsab stats`) |
 | §0 Inventário da estação / G0–G1 | **Fechados em 18/10/2026** com 14 exames reais de 3 pacientes — `docs/G0_resultado.md` (pendentes: tela "Sobre", olho de calibração, comparador) |
 | §9 Piloto com participantes e comparador | **Depende de dados reais** — `docs/protocolo_piloto.md` |
@@ -61,6 +64,11 @@ baixar JSON/CSV/PDF por exame. Os números são idênticos aos do programa de co
 verificado a 12 casas decimais). Pastas com subpastas (uma por exportação) e pastas com dois pacientes são tratadas
 como no programa.
 
+**Publicada em https://aberrometria-tms.vercel.app** (Vercel, projeto `aberrometria-tms`): a mesma página, servida por
+HTTPS. O servidor só entrega o arquivo; a pasta do TMS continua sendo lida e calculada no navegador. Para publicar uma
+versão nova, depois que o CI do commit passar: `web/publish_vercel.sh` (baixa o HTML gerado pelo CI, envia só a página
+e confere o sha256 servido).
+
 **Opção C — rodar do código-fonte (qualquer sistema):**
 
 ```bash
@@ -82,14 +90,16 @@ pytest                    # suíte de verificação
 3. A aba **Resultado completo** mostra, numa folha A4, o mapa de potência axial **no estilo do TMS** (escala
    Standard 40,5–53,0 D em passos de 0,5 D com a paleta do aparelho, transferidor, meridianos íngreme/plano com as
    potências a 3/5/7 mm, caixa *Astig Stats*, pupila), mais tangencial, refrativa, elevação, frente de onda total e
-   de alta ordem, Zernike, geometria/pupila/astigmatismo, a tabela dos perfis (3/4/5/6 mm e pupila medida, centro
-   no vértice e na pupila) e os índices do TMS — **Imprimir resultado completo…** manda para a impressora; a mesma
-   página é a 1ª do PDF em `analises/`.
+   de alta ordem, Zernike, geometria/pupila (e chord mu aparente)/astigmatismo, a **ceratometria por zona**, a tabela
+   dos perfis (3/4/5/6 mm e pupila medida, centro no vértice e na pupila) e os índices do TMS —
+   **Imprimir resultado completo…** manda direto para a impressora; a mesma página é a 1ª do PDF em `analises/`.
 4. A aba **Topografia (TMS)** tem os **botões de visualização**: mapa (axial, tangencial, refrativa, elevação, frente
    de onda, alta ordem), escala (Standard do TMS ou ajustada ao exame), zona (tudo, 3, 5, 7 mm), **diâmetro pupilar**
    (medido pelo TMS, 3, 4, 5, 6 mm) e centro (vértice/pupila). Os filtros valem também para a página de resultado
-   completo e para a impressão. As demais abas detalham: *Importação*, *Geometria*, *Frente de onda*, *Zernike*,
-   *Comparação*, *Técnico*.
+   completo e para a impressão. As demais abas detalham: *Ceratometria* (K1 plano, K2 curvo e eixos em todos os
+   diâmetros, zonas 0–3/0–6 mm, pupila, SimK do TMS e os 25 anéis, com gráficos por diâmetro e *Copiar tabela (TSV)*),
+   *Importação* (diagnóstico, SimK/índices do TMS), *Geometria*, *Frente de onda*, *Zernike*, *Comparação* (ex.: as
+   duas capturas do mesmo olho), *Técnico*.
 
 Linha de comando: `tmsab analyze "D:\TMS\<paciente>"` faz o mesmo (relatórios em `analises/`);
 `tmsab batch RAIZ --out SAIDA` processa várias pastas de pacientes e gera `resumo_longo.csv` para `tmsab stats`.
@@ -110,7 +120,7 @@ sintéticos (perfil v0) — e `tmsab.synthetic.write_export_folder_v1` gera past
 
 ```bash
 tmsab verify          # oval de Descartes (W≡0), esfera vs Seidel, traçado 3D vs referência meridional, sintéticos
-pytest -q             # 73 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py)
+pytest -q             # 178 ensaios (matriz da §8 em docs/validacao.md + formato real + ceratometria + topografia)
 ```
 
 Resultados registrados: esfera R=7,8 mm → c(4,0)=+0,0204 µm a 3 mm (Seidel +0,0197); elipsoide Q=−1/n² →
@@ -121,7 +131,7 @@ quantização sistemática por anel; com 4 casas o erro cai para 0,004 µm (`doc
 ## Estrutura
 
 ```
-tmsab/            núcleo: model, adapters/, geometry, optics, zernike, quality, pipeline, reporting, plots, stats, synthetic, cli
+tmsab/            núcleo: model, adapters/, geometry, optics, zernike, quality, keratometry, pupila, pipeline, reporting, plots, stats, synthetic, cli
 tmsab/gui/        programa desktop (PySide6)
 tmsab/web.py      versão navegador (chamado pelo Pyodide); web/template.html + web/build_html.py geram o .html único
 tmsab/reference/  traçado meridional independente (verificação)

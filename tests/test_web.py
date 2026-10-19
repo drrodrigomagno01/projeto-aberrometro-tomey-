@@ -24,7 +24,7 @@ def export_dir(tmp_path_factory):
 def test_list_folder(export_dir):
     r = list_folder(export_dir)
     assert [e["exam_id"] for e in r["exams"]] == ["90001", "90002"]
-    assert r["exams"][0]["simk"]["CYL"] == 2.0 and r["patients"] and r["warnings"] == []
+    assert abs(r["exams"][0]["simk"]["CYL"] - 2.0) < 0.05 and r["patients"] and r["warnings"] == []
     assert "SINTETICO" not in json.dumps(r)
 
 
@@ -80,7 +80,7 @@ def test_resultado_completo_figure_and_html(export_dir, tmp_path):
     assert any("TOPOGRAFIA" in t and "axial" in t for t in texts)          # mapa grande (estilo TMS, sem título no eixo)
     assert any("tangencial" in t for t in titles) and any("refrativa" in t for t in titles)
     assert any("Elevação" in t for t in titles) and any("Alta ordem" in t for t in titles) and any("Zernike" in t for t in titles)
-    assert any("Frente de onda" in t for t in titles)
+    assert any(t.startswith("W total") for t in titles)
     assert abs(fig.get_size_inches()[0] - 8.27) < 0.01 and abs(fig.get_size_inches()[1] - 11.69) < 0.01
     # esfera de melhor ajuste de uma esfera exata recupera o raio
     t = np.linspace(0, 2 * np.pi, 200); r = np.linspace(0.3, 4.0, 15)[:, None]

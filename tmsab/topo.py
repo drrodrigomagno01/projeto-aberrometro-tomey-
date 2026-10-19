@@ -30,7 +30,7 @@ MAP_KINDS = {
     "tangencial": ("ROC", "Potência tangencial", "D"),
     "refrativa": ("POW", "Potência refrativa", "D"),
     "elevacao": ("HIT", "Elevação vs. esfera", "µm"),
-    "frente_onda": (None, "Frente de onda W", "µm"),
+    "frente_onda": (None, "W total", "µm"),
     "alta_ordem": (None, "Alta ordem (n ≥ 3)", "µm"),
 }
 MAP_LABELS_PT = {"axial": "Axial", "tangencial": "Tangencial", "refrativa": "Refrativa", "elevacao": "Elevação",
@@ -222,7 +222,8 @@ def draw_tms_map(ax: Axes, exam: NormalizedExam, analysis: Optional[Analysis] = 
         levels = np.linspace(-vl, vl, 9)
         R = a_
         ax.plot([wf.center_xy[0]], [wf.center_xy[1]], marker="+", color="black", ms=6, mew=0.8)
-        name = f"{name} — {wf.profile.diameter_mm:g} mm {('vértice' if wf.profile.center_mode == 'vertice' else 'pupila')}"
+        name = f"{name} ({unit}) — {wf.profile.diameter_mm:g} mm, {('vértice' if wf.profile.center_mode == 'vertice' else 'pupila')}"
+        unit = None
 
     # anotações comuns
     lim = R * (1.22 if o.protractor else 1.05)
@@ -247,7 +248,7 @@ def draw_tms_map(ax: Axes, exam: NormalizedExam, analysis: Optional[Analysis] = 
         _draw_stats_box(ax, stats, R, lim * 1.42, fontsize)
         _draw_pupil_box(ax, exam, pd, cx, cy, lim * 1.42, fontsize)
     if title:
-        ax.set_title(f"{name} ({unit})" + (f" — zona {o.zone_mm:g} mm" if o.zone_mm else ""), fontsize=fontsize + 1.5)
+        ax.set_title((f"{name} ({unit})" if unit else name) + (f" — zona {o.zone_mm:g} mm" if o.zone_mm and kind not in ("frente_onda", "alta_ordem") else ""), fontsize=fontsize + 1.5)
     return pm, levels, stats
 
 
@@ -312,8 +313,14 @@ def select_profile(analysis: Analysis, o: ViewOptions) -> Optional[WavefrontResu
     cands = [w for w in analysis.wavefronts if w.validity == "disponivel" and w.map_grid is not None]
     if not cands:
         return None
-    want_d = o.pupil_mm or (analysis.pupil.diameter if analysis.pupil.state == "registrada" and analysis.pupil.diameter else 6.0)
+    # sem diâmetro escolhido: 6 mm no vértice (padrão da página) ou a pupila medida quando o centro é a pupila
     want_c = o.center
+    if o.pupil_mm:
+        want_d = o.pupil_mm
+    elif want_c == "pupila" and analysis.pupil.state == "registrada" and analysis.pupil.diameter:
+        want_d = float(analysis.pupil.diameter)
+    else:
+        want_d = 6.0
     cands.sort(key=lambda w: (w.profile.center_mode != want_c, abs(w.profile.diameter_mm - want_d)))
     return cands[0]
 
