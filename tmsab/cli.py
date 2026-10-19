@@ -313,7 +313,7 @@ def cmd_verify(args):
                                (SyntheticSpec(exam_id="V3", R=7.8, Q=-0.2, zernike_um={"3,-3": 2.0}, decimals=6), (3, -3), 0.002)):
             d = write_bundle(spec, td)
             an, _ = analyze_exam(import_tms_bundle(d), with_maps=False)
-            w = an.wavefronts[1]
+            w = next(x for x in an.wavefronts if x.profile.name == "anterior_v1_vertice_6mm")
             got = next(c.value_um for c in w.coefficients if (c.n, c.m) == key)
             trt = fit_wavefront(trace_wavefront(build_surface(spec), w.profile), 3.0, 6)
             exp = trt.coeffs[trt.terms.index(key)]
