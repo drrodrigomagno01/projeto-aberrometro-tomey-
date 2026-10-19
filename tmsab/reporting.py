@@ -207,7 +207,8 @@ def keratometry_records(kres: Optional[KeratometryResult]) -> list[dict[str, Any
         out.append(_registro_simk("simk_calculado", f"regra_tms_aneis_{aneis}", sc["k1_plano_D"], sc.get("eixo_k1_deg"),
                                   sc["k2_curvo_D"], sc.get("eixo_k2_deg"), sc.get("delta_k_D", sc["k2_curvo_D"] - sc["k1_plano_D"])))
     else:
-        motivo = next((n.split(": ", 1)[-1] for n in kres.notes if n.startswith("ceratometria indisponível")),
+        motivo = next((n.split(": ", 1)[-1] for n in kres.notes
+                       if n.startswith(("ceratometria indisponível", "SimK recalculado indisponível"))),
                       f"regra do TMS sem meridianos completos nos anéis {aneis.replace('_', ', ')}")
         out.append(_registro_vazio("simk_calculado", f"regra_tms_aneis_{aneis}", motivo))
     t = kres.simk_tms or {}
@@ -232,7 +233,7 @@ def _wrap(lines: list[str]) -> list[str]:
             out.append(ln)
             continue
         indent = "  " if ln.startswith("  ") else ""
-        width = 96 if indent else 118
+        width = 96 if indent else 100      # texto corrido em DejaVu Sans 8,5 pt: 100 caracteres cabem até ~0,93 da folha
         # recuo da continuação: espaços comuns nas linhas monoespaçadas; no texto corrido, espaços não separáveis —
         # dois espaços comuns no início fariam _text_page usar a fonte monoespaçada (mais larga: a linha saía da folha)
         sub = "    " if indent else chr(0xA0) * 4
@@ -404,7 +405,9 @@ def keratometry_report_lines(kres: Optional[KeratometryResult]) -> list[str]:
                  f"K2 curvo {_k_eixo(sc.get('k2_curvo_D'), sc.get('eixo_k2_deg'))}, ΔK {fmt_k(sc.get('delta_k_D'))} D; "
                  f"MinK {_k_eixo(sc.get('mink_D'), sc.get('eixo_mink_deg'))}")
     else:
-        L.append(f"SimK recalculado (regra do TMS, anéis {aneis}): indisponível")
+        mot = next((n.split(": ", 1)[-1] for n in kres.notes
+                    if n.startswith(("ceratometria indisponível", "SimK recalculado indisponível"))), "")
+        L.append(f"SimK recalculado (regra do TMS, anéis {aneis}): indisponível" + (f" — {mot}" if mot else ""))
     t = kres.simk_tms or {}
     extras = []
     if "MinK" in t:

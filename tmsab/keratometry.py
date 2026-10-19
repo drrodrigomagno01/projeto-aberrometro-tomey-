@@ -55,10 +55,14 @@ _MIN_AMOSTRAS_AJUSTE = 9
 # ---------------------------------------------------------------------------
 # Utilidades de ângulo e formatação (usadas por todas as saídas)
 # ---------------------------------------------------------------------------
+_EIXO_TOL = 5e-3        # 0,005° (metade da menor casa impressa): 0° e 180° são o mesmo meridiano
+PERFIL_VERIFICADO = "tms4_datatables_v1"     # único formato em que o DIO foi conferido como potência axial
+
+
 def eixo_tabo(deg: float) -> float:
-    """Meridiano em (0, 180]: 0° vira 180° (notação TABO de eixo)."""
+    """Meridiano em (0, 180]: 0° vira 180° (notação TABO de eixo), também a menos de 0,005° de 0°/180°."""
     a = float(deg) % 180.0
-    return 180.0 if a < 1e-9 else a
+    return 180.0 if a < _EIXO_TOL or a > 180.0 - _EIXO_TOL else a
 
 
 def fmt_eixo(deg: Optional[float]) -> str:
@@ -211,12 +215,21 @@ def _disponibilidade_meridianos(z: KeratometryZone, ok: np.ndarray, interp: np.n
         z.marca_interpolados = z.fracao_interpolados >= qc.k_interp_mark_fraction
 
 
+def _media_por_anel(r: np.ndarray, mediana: bool = False) -> np.ndarray:
+    """Média (ou mediana) de r por anel só nos anéis com algum valor finito; NaN nos demais (sem RuntimeWarning)."""
+    out = np.full(r.shape[0], np.nan)
+    tem = np.isfinite(r).any(axis=1)
+    if tem.any():
+        out[tem] = (np.nanmedian if mediana else np.nanmean)(r[tem], axis=1)
+    return out
+
+
 def _circunferencia(d: float, dio, st, r, theta, qc: QualityConfig) -> KeratometryZone:
     z = KeratometryZone(rotulo=f"Ø {d:g} mm", tipo="circunferencia", diametro_mm=float(d), validity="indisponivel",
                         centro_xy=(0.0, 0.0))
     vals, interp, ok = _valores_na_circunferencia(dio, st, r, d / 2.0)
     if not ok.any():
-        r_med = np.nanmedian(r, axis=1)
+        r_med = _media_por_anel(r, mediana=True)
         primeiro = float(r_med[np.isfinite(r_med)][0]) if np.isfinite(r_med).any() else float("nan")
         ultimo = float(r_med[np.isfinite(r_med)][-1]) if np.isfinite(r_med).any() else float("nan")
         if math.isfinite(primeiro) and d / 2.0 < primeiro:
@@ -283,7 +296,7 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
     """
     nr, na = r.shape
     usable = ((st == PointState.MEASURED) | (st == PointState.INTERPOLATED)) & np.isfinite(r) & np.isfinite(dio)
-    rn = np.nanmean(np.where(np.isfinite(r), r, np.nan), axis=1)
+    rn = _media_por_anel(r)
     idx = np.arange(nr)
     good = np.isfinite(rn)
     rn_full = np.interp(idx, idx[good], rn[good]) if good.sum() >= 2 else np.where(good, rn, 0.0)
@@ -295,10 +308,13 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
     # ausente dentro dela
     folga = 0.5 * float(np.nanmedian(dr)) if np.isfinite(dr).any() else 0.0
     alcance = np.where(usable, r, -np.inf).max(axis=0)
-    ausente_dentro = np.any(dentro & (st == PointState.MISSING), axis=0)
+    # ponto sem dado dentro da zona, pela posição nominal do anel (no formato real o RAD do ponto ausente é NaN)
+    ausente_dentro = np.any((rn_full[:, None] <= borda[None, :]) & ~usable, axis=0)
     valida = np.isfinite(borda)
     meridianos_ok = valida & (alcance >= borda - folga) & ~ausente_dentro
-    z.fracao_cobertura = float(meridianos_ok[valida].mean()) if valida.any() else 0.0
+    z.fracao_cobertura = float(meridianos_ok.mean())          # meridiano sem borda conta como não coberto
+    if (~valida).any():
+        z.notes.append(f"{int((~valida).sum())} meridianos sem borda no contorno (fora da área)")
     soma = float(np.sum(peso[sel]))
     interp = sel & (st == PointState.INTERPOLATED)
     z.fracao_interpolados = float(np.sum(peso[interp]) / soma) if soma > 0 else 0.0
@@ -310,6 +326,8 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
     if z.fracao_interpolados > 0:
         z.notes.append(f"{z.fracao_interpolados:.0%} da área usa pontos interpolados pelo aparelho (pálpebra)")
         z.marca_interpolados = z.fracao_interpolados >= qc.k_interp_mark_fraction
+    if not z.block_reasons and soma <= 0:
+        z.block_reasons.append(f"nenhuma amostra dentro da {nome}")
     if z.block_reasons:
         return z
     th = np.broadcast_to(theta[None, :], r.shape)
@@ -354,10 +372,13 @@ def _disco(d: float, dio, st, r, theta, qc: QualityConfig) -> KeratometryZone:
     """Zona 0–d centrada no vértice (média ponderada pela área), como as 'zonas' do Pentacam/Atlas."""
     z = KeratometryZone(rotulo=f"zona 0–{d:g} mm", tipo="zona", diametro_mm=float(d), validity="indisponivel",
                         centro_xy=(0.0, 0.0))
-    r_med = np.nanmedian(r, axis=1)
-    ultimo = float(r_med[np.isfinite(r_med)][-1]) if np.isfinite(r_med).any() else float("nan")
-    if math.isfinite(ultimo) and d / 2.0 > ultimo:
-        z.block_reasons.append(f"zona 0–{d:g} mm além da cobertura dos anéis (último anel em Ø ≈ {2 * ultimo:.2f} mm)")
+    r_med = _media_por_anel(r, mediana=True)
+    fin = r_med[np.isfinite(r_med)]
+    if fin.size and d / 2.0 < float(fin[0]):
+        z.block_reasons.append(f"zona 0–{d:g} mm dentro da lacuna central do Plácido (1º anel em Ø ≈ {2 * float(fin[0]):.2f} mm)")
+        return z
+    if fin.size and d / 2.0 > float(fin[-1]):
+        z.block_reasons.append(f"zona 0–{d:g} mm além da cobertura dos anéis (último anel em Ø ≈ {2 * float(fin[-1]):.2f} mm)")
         return z
     borda = np.full(r.shape[1], d / 2.0)
     return _zona_por_area(z, borda, dio, st, r, theta, qc, nome="zona")
@@ -391,6 +412,8 @@ def simk_regra_tms(dio: np.ndarray, st: np.ndarray, theta_deg: np.ndarray, aneis
         return None
     j = int(np.nanargmax(M[:meia]))
     j90 = (j + na // 4) % na
+    if not np.isfinite(M[j90]):
+        return None            # meridiano plano (90° do curvo) sem os anéis completos: a regra do TMS não se aplica
     jmin = int(np.nanargmin(M))
     out = {
         "k2_curvo_D": float(M[j]), "eixo_k2_deg": eixo_tabo(theta_deg[j]),
@@ -473,6 +496,9 @@ def compute_keratometry(exam: NormalizedExam, cfg: Optional[KeratometryConfig] =
         if cfg.zona_pupilar != "nenhuma":
             res.pupila = KeratometryZone(rotulo="pupila", tipo="pupila", diametro_mm=exam.pupil.diameter,
                                          validity="indisponivel", block_reasons=[motivo])
+        res.simk_tms = simk_do_xref(exam)
+        if res.simk_tms and {"SimK1", "SimK2"} <= set(res.simk_tms):
+            res.conferencia = [f"SimK × XREF não conferido: SimK recalculado indisponível ({motivo})"]
         return res
 
     dio = np.asarray(tab.values, dtype=float)
@@ -491,6 +517,12 @@ def compute_keratometry(exam: NormalizedExam, cfg: Optional[KeratometryConfig] =
     res.simk_calculado = simk_regra_tms(dio, st, theta_deg, cfg.simk_aneis)
     res.simk_tms = simk_do_xref(exam)
     res.conferencia = conferir_simk(res.simk_calculado, res.simk_tms, qc)
+    if res.simk_calculado is None:
+        a = f"{cfg.simk_aneis[0]}–{cfg.simk_aneis[-1]}" if cfg.simk_aneis else ""
+        res.notes.append(f"SimK recalculado indisponível (regra do TMS, anéis {a}): o meridiano curvo ou o plano "
+                         f"não tem os anéis completos")
+        if res.simk_tms and {"SimK1", "SimK2"} <= set(res.simk_tms):
+            res.conferencia.append(f"SimK × XREF não conferido: SimK recalculado indisponível (anéis {a} incompletos)")
     if res.pupila is not None and res.pupila.validity == "disponivel" and res.simk_tms and "ACP" in res.simk_tms:
         dk = res.pupila.k_medio_D - res.simk_tms["ACP"]
         res.conferencia.append(f"K médio na zona pupilar × ACP do TMS: Δ {_assinado(dk)} D")
@@ -501,8 +533,10 @@ def compute_keratometry(exam: NormalizedExam, cfg: Optional[KeratometryConfig] =
         f"fonte {cfg.fonte} (potência axial do TMS, índice {cfg.indice_ceratometrico}); Fourier por meridiano "
         f"(harmônicos 0–2); centro no vértice; K1 = plano, K2 = curvo; eixos TABO 1–180"
     )
-    if not exam.frame.transform_verified:
-        res.notes.append("perfil de exportação presumido: a semântica do DIO (potência axial) não foi verificada neste formato")
+    perfil = getattr(getattr(exam, "bundle", None), "adapter_profile", None)
+    if perfil != PERFIL_VERIFICADO or not exam.frame.transform_verified:
+        res.notes.append(f"perfil de exportação {perfil or 'desconhecido'} (presumido): a semântica do DIO como potência "
+                         f"axial só foi verificada no formato real ({PERFIL_VERIFICADO})")
     return res
 
 

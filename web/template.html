@@ -362,7 +362,7 @@ $("btnSaveHtml").onclick = () => {
   main.querySelectorAll("article.exame").forEach((a) => (a.style.display = ""));
   const doc = "<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><title>Aberrometria corneana anterior calculada — relatório</title><style>" + REPORT_CSS +
     "</style></head><body><main class='relatorio'><h1>Aberrometria corneana anterior calculada — relatório de pesquisa (tmsab " + esc(CFG.version) + ")</h1>" + main.innerHTML +
-    "</main><script>window.addEventListener('beforeprint',()=>document.querySelectorAll('details.zern').forEach(d=>d.open=true));<\/script></body></html>";
+    "</main><script>window.addEventListener('beforeprint',()=>document.querySelectorAll('details.zern, details.kerato-aneis').forEach(d=>d.open=true));<\/script></body></html>";
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([doc], { type: "text/html" }));
   const ids = Object.values(results).map((r) => r.study_id).filter((v, i, s) => s.indexOf(v) === i).join("_") || "relatorio";
   a.download = "relatorio_" + ids + ".html"; a.click();
