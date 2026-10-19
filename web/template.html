@@ -338,7 +338,7 @@ function dlButton(label, data, mime, filename) {
 }
 
 // ----------------------------------------------------------------------------- impressão e salvamento
-function openDetailsForPrint(open) { document.querySelectorAll("details.zern").forEach((d) => { if (open) { d.dataset.was = d.open ? "1" : "0"; d.open = true; } else if (d.dataset.was === "0") d.open = false; }); }
+function openDetailsForPrint(open) { document.querySelectorAll("details.zern, details.kerato-aneis").forEach((d) => { if (open) { d.dataset.was = d.open ? "1" : "0"; d.open = true; } else if (d.dataset.was === "0") d.open = false; }); }
 window.addEventListener("beforeprint", () => openDetailsForPrint(true));
 window.addEventListener("afterprint", () => openDetailsForPrint(false));
 function printMode(onlyCompleto) {

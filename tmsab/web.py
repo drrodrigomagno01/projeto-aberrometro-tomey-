@@ -23,10 +23,20 @@ from matplotlib.figure import Figure
 
 from . import CORE_VERSION
 from .adapters import AdapterError, import_tms_bundle, list_exams, patient_display_name
+from .keratometry import COLUNAS_TABELA, LEGENDA_TABELA, eixo_tabo, linhas_resumo
 from .model import Analysis, NormalizedExam, QualityConfig, ReconstructionConfig
 from .pipeline import analyze_exam, default_profiles
 from .plots import figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
-from .reporting import canonical_result, export_csv, export_json, export_pdf, report_lines, report_stem
+from .reporting import (
+    KERATO_TITULO,
+    canonical_result,
+    export_csv,
+    export_json,
+    export_pdf,
+    kerato_limits_text,
+    report_lines,
+    report_stem,
+)
 
 matplotlib.use("Agg")
 
@@ -123,6 +133,80 @@ def _zernike_table(wf) -> str:
             + "".join(cells) + "</tbody></table>")
 
 
+_KERATO_CLASSE = {"pupila": "kerato-pupila", "referencia": "kerato-ref", "zona": "kerato-zona"}
+_ESTADO_PT = {"indisponivel": "INDISPONÍVEL", "invalida": "INVÁLIDA"}
+
+
+def _kerato_rows(linhas: list[dict[str, Any]]) -> str:
+    rows = []
+    for ln in linhas:
+        cls = _KERATO_CLASSE.get(ln.get("destaque") or "", "")
+        attr = f" class='{cls}'" if cls else ""
+        if ln["disponivel"]:
+            rows.append(f"<tr{attr}><td>{_e(ln['rotulo'])}</td>" + "".join(f"<td>{_e(t)}</td>" for t in ln["texto"]) + "</tr>")
+        else:
+            estado = _ESTADO_PT.get(ln["validity"], str(ln["validity"]).upper())
+            rows.append(f"<tr{attr}><td>{_e(ln['rotulo'])}</td><td colspan='6' class='motivo'>{_e(estado)}"
+                        + (f" — {_e(ln['motivo'])}" if ln["motivo"] else "") + "</td></tr>")
+    return "".join(rows)
+
+
+def _kerato_table(an: Analysis) -> str:
+    """Tabela da ceratometria por zona (classe 'metricas'): circunferências, zonas 0–d, zona pupilar (linha destacada),
+    SimK do TMS (cinza); anéis medidos num <details> recolhível; conferência, alertas e notas. Sem nome do paciente."""
+    k = getattr(an, "keratometry", None)
+    if k is None:
+        return "<p class='aviso'>Ceratometria não calculada nesta análise.</p>"
+    linhas = linhas_resumo(k, incluir_aneis=True)
+    head = "<thead><tr>" + "".join(f"<th>{_e(c)}</th>" for c in COLUNAS_TABELA) + "</tr></thead>"
+    principal = [ln for ln in linhas if ln["tipo"] != "anel"]
+    aneis = [ln for ln in linhas if ln["tipo"] == "anel"]
+    html_ = f"<table class='metricas kerato'>{head}<tbody>{_kerato_rows(principal)}</tbody></table>"
+    html_ += f"<p class='legenda'>{_e(LEGENDA_TABELA)}</p>"
+    if aneis:
+        html_ += (f"<details class='kerato-aneis'><summary>Anéis do Plácido medidos ({len(aneis)}), no diâmetro medido "
+                  f"(2 × RAD médio)</summary><table class='metricas kerato'>{head}<tbody>{_kerato_rows(aneis)}</tbody></table></details>")
+    alertas = list(getattr(k, "alertas", None) or [])
+    itens = [f"<li class='aviso'>Alerta (informativo, não é recomendação): {_e(a)}</li>" for a in alertas]
+    itens += [f"<li>Conferência: {_e(c)}</li>" for c in k.conferencia]
+    itens += [f"<li>{_e(n)}</li>" for n in k.notes if n not in alertas]
+    if k.pupila is not None:
+        itens += [f"<li>{_e(n)}</li>" for n in k.pupila.notes]
+    if itens:
+        html_ += f"<ul class='kerato-notas'>{''.join(itens)}</ul>"
+    return html_
+
+
+def _num(v: Any) -> Optional[float]:
+    """Número finito (float) ou None — o JSON da página não aceita NaN."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if np.isfinite(f) else None
+
+
+def _kerato_summary(an: Analysis) -> Optional[dict[str, Any]]:
+    """Ceratometria resumida para o JSON da página: linhas da folha A4 (números; eixos TABO 1–180), conferência e
+    alertas. K1 = plano, K2 = curvo (no XREF, SimK1 é o curvo)."""
+    k = getattr(an, "keratometry", None)
+    if k is None:
+        return None
+    linhas = []
+    for ln in linhas_resumo(k):
+        e1, e2 = _num(ln["eixo_k1"]), _num(ln["eixo_k2"])
+        linhas.append({
+            "rotulo": ln["rotulo"], "tipo": ln["tipo"], "destaque": ln["destaque"], "validity": ln["validity"],
+            "motivo": ln["motivo"], "diametro_mm": _num(ln["diametro_mm"]),
+            "k1_plano_D": _num(ln["k1"]), "eixo_k1_deg": eixo_tabo(e1) if e1 is not None else None,
+            "k2_curvo_D": _num(ln["k2"]), "eixo_k2_deg": eixo_tabo(e2) if e2 is not None else None,
+            "delta_k_D": _num(ln["dk"]), "k_medio_D": _num(ln["km"]),
+        })
+    return {"linhas": linhas, "conferencia": list(k.conferencia), "alertas": list(getattr(k, "alertas", None) or [])}
+
+
 def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True, patient_name: Optional[str] = None) -> str:
     """Fragmento HTML de UM exame (seção <article>), com figuras PNG embutidas; imprimível.
     `patient_name` (opção do usuário) aparece no cabeçalho e na página de resultado completo; nunca no JSON/CSV."""
@@ -152,6 +236,7 @@ def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True, pati
         + "</li></ul></section>"
     )
     metrics = "<section><h3>Resultados por perfil</h3>" + _metrics_table(an) + "</section>"
+    kerato = f"<section class='kerato'><h3>{_e(KERATO_TITULO)}</h3>{_kerato_table(an)}</section>"
 
     completo = ""
     if with_maps:
@@ -196,6 +281,7 @@ def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True, pati
         f"<p>Limites de disponibilidade (provisórios, não clínicos): medidos ≥{qc.min_measured_fraction:.0%}, utilizáveis ≥{qc.min_usable_fraction:.0%}, "
         f"borda ≥{qc.min_edge_meridians_fraction:.0%} dos meridianos, setor ≤{qc.max_missing_sector_deg:.0f}°, lacuna central ≤{qc.max_central_gap_mm:.2f} mm, "
         f"resíduo ≤{qc.max_surface_residual_rms_um:.1f} µm. Nenhuma faixa de normalidade é atribuída.</p>"
+        + f"<p>{_e(kerato_limits_text(qc))}.</p>"
         + (f"<ul>{av}</ul>" if av else "")
         + f"<p>Versões: {_e(', '.join(f'{k}={v}' for k, v in an.versions.items()))}</p>"
         + f"<details><summary>Arquivos de origem e diagnósticos da importação</summary><ul>{hashes}{diag}</ul></details>"
@@ -203,7 +289,7 @@ def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True, pati
     )
     full_text = "<details class='texto'><summary>Relatório em texto (idêntico ao PDF)</summary><pre>" + _e("\n".join(report_lines(an))) + "</pre></details>"
     return (f"<article class='exame' data-exam='{_e(ident.exam_id)}' data-eye='{_e(ident.eye or '')}'>"
-            + head + completo + "<div class='detalhes'>" + metrics + geo + figs + qual + full_text
+            + head + completo + "<div class='detalhes'>" + metrics + geo + kerato + figs + qual + full_text
             + f"<p class='rodape'>{_e(DISCLAIMER)}</p></div></article>")
 
 
@@ -230,6 +316,14 @@ table.metricas td:first-child { text-align: left; }
 .estado-disponivel { color: #1b5e20; font-weight: bold; }
 .estado-indisponivel, .estado-invalida { color: #8B0000; font-weight: bold; }
 .motivo { text-align: left !important; color: #555; }
+table.kerato tr.kerato-pupila td { background: #fff3cd; font-weight: bold; }
+table.kerato tr.kerato-pupila td.motivo { font-weight: normal; }
+table.kerato tr.kerato-zona td { background: #eef6ee; }
+table.kerato tr.kerato-ref td { color: #777; }
+.kerato p.legenda, ul.kerato-notas li { font-size: 11px; color: #444; }
+ul.kerato-notas { margin: 4px 0; padding-left: 18px; }
+details.kerato-aneis { font-size: 12px; margin: 4px 0; }
+details.kerato-aneis > summary { cursor: pointer; color: #1a4f8a; }
 .figuras { display: flex; flex-wrap: wrap; gap: 10px; }
 figure { margin: 6px 0; }
 figure img { max-width: 100%; height: auto; border: 1px solid #eee; }
@@ -299,6 +393,7 @@ def analyze_exam_html(directory: str, exam_id: Optional[str], options: Optional[
         "profiles": [{"name": w.profile.name, "validity": w.validity, "block_reasons": w.block_reasons,
                       "metrics": {k: (None if (isinstance(v, float) and not np.isfinite(v)) else v) for k, v in w.metrics.items()}}
                      for w in an.wavefronts],
+        "keratometry": _kerato_summary(an),
     }
     out["html"] = report_html(exam, an, with_maps=with_maps, patient_name=name)
     tmp = tempfile.mkdtemp(prefix="tmsab_web_")

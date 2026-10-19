@@ -124,6 +124,35 @@ def _print_analysis(an):
             astig = (f" | cil {m['cilindro_equivalente_D']:+.2f} D eixo {m['eixo_equivalente_deg']:.0f}° "
                      f"(meridiano mais curvo {(m['eixo_equivalente_deg'] - 90) % 180:.0f}°)")
         print(f"  {w.profile.name}: SA c40={m['sa_c40']:+.4f} µm | coma |{m['coma_magnitude']:.4f}| (c3-1 {m['coma_c3m1']:+.4f}, c31 {m['coma_c31']:+.4f}) | trefoil |{m['trefoil_magnitude']:.4f}| | HOA RMS={m['rms_hoa_n3plus']:.4f} µm | astig c22={m['astig_c22']:+.4f} c2-2={m['astig_c2m2']:+.4f}{astig}")
+    _print_keratometry(an)
+
+
+def _print_keratometry(an):
+    """Resumo curto da ceratometria por zona: Ø 3 mm, zona 0–3 mm, zona pupilar e SimK do TMS (+ conferência)."""
+    from .keratometry import linhas_resumo
+    k = getattr(an, "keratometry", None)
+    if k is None:
+        return
+    linhas = linhas_resumo(k)
+
+    def _achar(tipo, d=None):
+        return next((ln for ln in linhas if ln["tipo"] == tipo
+                     and (d is None or (ln["diametro_mm"] is not None and abs(ln["diametro_mm"] - d) < 1e-6))), None)
+
+    escolhidas = [_achar("circunferencia", 3.0), _achar("zona", 3.0), _achar("pupila"), _achar("simk_tms")]
+    print("  ceratometria (potência axial do TMS, n 1,3375; K1 = plano, K2 = curvo; eixos TABO):")
+    for ln in (x for x in escolhidas if x is not None):
+        if ln["disponivel"]:
+            k1, e1, k2, e2, dk, km = ln["texto"]
+            print(f"    {ln['rotulo']}: K1 {k1} D @ {e1} / K2 {k2} D @ {e2} (ΔK {dk} D, Km {km} D)")
+        elif "não registrada" in ln["rotulo"]:
+            print(f"    {ln['rotulo']}")
+        else:
+            print(f"    {ln['rotulo']}: {ln['validity'].upper()} — {ln['motivo']}")
+    for c in k.conferencia:
+        print(f"    conferência: {c}")
+    for a in getattr(k, "alertas", None) or []:
+        print(f"    alerta (informativo): {a}")
 
 
 def cmd_analyze(args):
@@ -164,6 +193,38 @@ def _long_rows(an):
             rows.append({"participante": an.identity.study_id, "olho": an.identity.eye or "", "metodo": "TMS_calc",
                          "captura": an.identity.capture_index if an.identity.capture_index is not None else "", "exame": an.identity.exam_id,
                          "perfil": w.profile.name, "metrica": f"{k}@{w.profile.diameter_mm:g}mm_{w.profile.center_mode}", "valor": f"{v:.6f}", "analise": an.analysis_id})
+    rows.extend(_kerato_long_rows(an))
+    return rows
+
+
+# métricas da ceratometria que entram na estatística: potências e vetor de potência (J0/J45), nunca o eixo cru
+_KERATO_LONGO = ("k1_plano_D", "k2_curvo_D", "delta_k_D", "k_medio_D", "j0_D", "j45_D")
+
+
+def _kerato_long_rows(an):
+    """Ceratometria no resumo_longo.csv: K1, K2, ΔK, Km, J0 e J45 por circunferência (@{d}mm_vertice), zona 0–d
+    (@zona_0-{d}mm_vertice) e zona pupilar (@pupila), mais diametro_pupila_mm. Sem eixo: média e desvio-padrão
+    lineares de ângulo não fazem sentido (o eixo entra pelo J0/J45). Linhas só com códigos do exame (nunca nomes)."""
+    from .reporting import kerato_chave
+    k = getattr(an, "keratometry", None)
+    if k is None:
+        return []
+    ident = {"participante": an.identity.study_id, "olho": an.identity.eye or "", "metodo": "TMS_calc",
+             "captura": an.identity.capture_index if an.identity.capture_index is not None else "",
+             "exame": an.identity.exam_id, "perfil": k.config.versao, "analise": an.analysis_id}
+    zonas = list(k.zonas) + list(getattr(k, "discos", None) or []) + ([k.pupila] if k.pupila is not None else [])
+    rows = []
+    for z in zonas:
+        chave = kerato_chave(z)
+        if z.validity != "disponivel":
+            rows.append({**ident, "metrica": f"validade@{chave}", "valor": z.validity})
+            continue
+        for m in _KERATO_LONGO:
+            v = getattr(z, m)
+            if v is not None and np.isfinite(v):
+                rows.append({**ident, "metrica": f"{m}@{chave}", "valor": f"{round(float(v), 6) + 0.0:.6f}"})
+    if an.pupil.state == "registrada" and an.pupil.diameter and an.pupil.diameter > 0:
+        rows.append({**ident, "metrica": "diametro_pupila_mm", "valor": f"{an.pupil.diameter:.4f}"})
     return rows
 
 
