@@ -602,7 +602,7 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
     #              + 2×2 pequenos (tangencial, refrativa, elevação, frente de onda do diâmetro pupilar escolhido)
     from .topo import ViewOptions, draw_tms_legend, draw_tms_map, select_profile
     vo = view or ViewOptions()
-    y1, w1 = 0.608, 0.39
+    y1, w1 = 0.622, 0.37
     h1 = w1 * fw / fh
     axb = fig.add_axes([XL, y1, w1, h1])
     big = ViewOptions(kind="axial", scale=vo.scale, zone_mm=vo.zone_mm, pupil_mm=vo.pupil_mm, center=vo.center, annotate=True, protractor=True)
@@ -615,7 +615,7 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
     fig.text(XL, y1 + h1 + 0.017, "TOPOGRAFIA — potência axial, escala " + ("Standard do TMS (40,5–53,0 D, 0,5 D)" if big.scale == "tms" else "ajustada ao exame")
              + (f", zona {big.zone_mm:g} mm" if big.zone_mm else "") + "; meridianos íngreme/plano com as potências a 3/5/7 mm; pupila tracejada",
              fontsize=6.3, weight="bold", color="#333", va="top")
-    sw = 0.175; sh = sw * fw / fh
+    sw = 0.165; sh = sw * fw / fh
     grid = [("tangencial", 0.50, y1 + h1 - sh - 0.018), ("refrativa", 0.745, y1 + h1 - sh - 0.018), ("elevacao", 0.50, y1 - 0.004), ("frente_onda", 0.745, y1 - 0.004)]
     for kind, x, y in grid:
         ax = fig.add_axes([x, y, sw, sh])
@@ -629,7 +629,7 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
 
     # ---- linha 2: alta ordem + Zernike do perfil escolhido (diâmetro pupilar / centro); geometria à direita
     wf = select_profile(analysis, vo) if analysis.wavefronts else None
-    y2 = 0.432; w2 = 0.165; h2 = w2 * fw / fh
+    y2 = 0.455; w2 = 0.15; h2 = w2 * fw / fh
     ax2 = fig.add_axes([0.075, y2, w2, h2]); cax2 = fig.add_axes([0.075 + w2 + 0.005, y2 + 0.01, 0.009, h2 - 0.02])
     ax3 = fig.add_axes([0.315, y2, 0.29, h2])
     if wf is not None and wf.map_grid is not None:
@@ -733,7 +733,7 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
     y -= 0.0125
     if rows:
         n = len(rows) + 1
-        rh = min(0.0145, max(0.0090, (y - piso - 0.095) / n))
+        rh = min(0.0145, max(0.0085, (y - piso - 0.11) / n))
         rh = min(rh, (y - piso - 0.012) / n)   # muitos perfis: linhas mais baixas, nunca sobre o rodapé
         fs_t = min(6.2, max(4.5, 0.62 * rh / py))
         axt = fig.add_axes([XL, y - n * rh, XR - XL, n * rh]); axt.set_axis_off()
@@ -776,7 +776,7 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
             cabe += 1
         fora = len({k for *_, k in resto[cabe:]})
         l_mot = [t for t in resto[:cabe] if t[4] < 1000]
-        l_av = [t for t in resto[:cabe] if t[4] >= 1000] + [(f"… (+{fora} item(ns) no relatório detalhado)", 5.4, "#555", 0.0, -1)]
+        l_av = [t for t in resto[:cabe] if t[4] >= 1000] + ([(f"… (+{fora} item(ns) no relatório detalhado)", 5.4, "#555", 0.0, -1)] if fora else [])
     for ln, fs, cor, extra, _ in l_mot + l_nota + l_av:
         fig.text(XL, y, ln, fontsize=fs, va="top", color=cor)
         y -= fs * 1.3 * py + extra
