@@ -87,6 +87,38 @@
   interpolados pelo aparelho; nota "eixo pouco definido" com ΔK < 0,50 D; conferência SimK recalculado × XREF com
   tolerância de 0,05 D e 5° (eixo só com CYL ≥ `k_eixo_min_cyl_D`, 0,75 D).
 
+## Chord mu aparente (`tmsab/pupila.py`)
+
+- **Definição** (Chang & Waring 2014): distância entre o centro da pupila e o reflexo corneano coaxial com o olho
+  fixando o alvo. No TMS, o vértice (origem do mapa) é esse reflexo: o centro dos anéis com o olho no alvo de
+  fixação; o centro da pupila vem do ajuste de círculo à borda do PUP. **Chord mu aparente = |centro da pupila −
+  vértice|**, com as componentes no referencial do exame (x, y) e anatômicas: **nasal** (+ nasal, − temporal; em OD
+  +x é nasal, em OS +x é temporal) e **superior** (+ superior). Olho não identificado: só x e y.
+- **Pupila desta captura** (iluminação do Plácido, 5,8–7,8 mm nos exames reais): o centro da pupila se desloca com o
+  tamanho dela; a medida pressupõe boa fixação no alvo. Sem pupila registrada não há chord mu (nunca usa o vértice).
+- Entra no objeto da análise (`chord_mu`, JSON), na folha A4 (bloco PUPILA), na aba Ceratometria e na Importação do
+  programa, no relatório em texto, nas linhas de métrica `pupila_desta_captura` do CSV, nos detalhes do relatório HTML (linha da
+  pupila) e no resumo devolvido pela página (`summary["chord_mu"]`), e no `resumo_longo.csv`
+  (`chord_mu_aparente_mm`, `chord_mu_nasal_mm`, `chord_mu_superior_mm`: componentes anatômicas, comparáveis entre olhos).
+  Nos 9 exames reais com pupila detectada: 0,11–0,24 mm; entre as duas capturas do mesmo olho a distância difere
+  ≤ 0,02 mm e o vetor ≤ 0,03 mm.
+
+## Saídas da ceratometria e do chord mu (0.4.0)
+
+- **JSON** (`Analysis`): `keratometry` (config, `zonas` = circunferências, `discos` = zonas 0–d, `aneis`, `pupila`,
+  `simk_calculado`, `simk_tms` só com as colunas numéricas permitidas do XREF, `conferencia`, `alertas`, `notes`) e
+  `chord_mu` (`distancia_mm`, `x_mm`, `y_mm`, `nasal_mm`, `superior_mm`, `diametro_pupila_mm`; null sem pupila).
+- **CSV por exame** (`<stem>.csv`, 18 colunas, retangular como na 0.3.1): coeficientes e métricas por perfil; no fim,
+  linhas de métrica com perfil `pupila_desta_captura` (`pupila_estado`, `diametro_pupila_mm`, `chord_mu_aparente_mm`,
+  `chord_mu_x_mm`, `chord_mu_y_mm`, `chord_mu_nasal_mm`, `chord_mu_superior_mm`).
+- **CSV da ceratometria** (`<stem>_ceratometria.csv`, 21 colunas, retangular): identificação, tipo, zona, diametro_mm,
+  validade, k1_plano_D, eixo_k1_deg, k2_curvo_D, eixo_k2_deg, delta_k_D, k_medio_D, j0_D, j45_D, assimetria_D,
+  irregularidade_D, fracao_cobertura, fracao_interpolados, motivo — uma linha por circunferência, zona 0–d, pupila,
+  SimK recalculado, SimK do XREF e anel. Gravado ao lado dos outros relatórios e baixado na versão HTML.
+- **resumo_longo.csv** (`tmsab batch`): `k1_plano_D`, `k2_curvo_D`, `delta_k_D`, `k_medio_D`, `j0_D`, `j45_D` com o sufixo
+  `@{d}mm_vertice`, `@zona_0-{d}mm_vertice` ou `@pupila` (`validade@…` quando indisponível), `diametro_pupila_mm`,
+  `chord_mu_aparente_mm`, `chord_mu_nasal_mm`, `chord_mu_superior_mm`. Nunca o eixo cru da ceratometria.
+
 ## Identidade do cálculo
 
 `analysis_id` = SHA-256 (24 hex) de {hashes dos arquivos de origem, configuração de reconstrução, limites de

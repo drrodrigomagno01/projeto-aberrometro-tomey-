@@ -5,7 +5,7 @@
 Ferramenta de **pesquisa** que calcula a contribuição óptica modelada da **superfície anterior** da córnea a
 partir de dados numéricos já adquiridos pelo TMS. Saída: mapa de frente de onda, coeficientes de Zernike,
 aberração esférica primária, coma, trefoil e RMS de alta ordem, sempre vinculados a abertura, centro, modelo e
-versões.
+versões; e, desde a 0.4.0, a ceratometria por zona da potência axial medida pelo TMS e o chord mu aparente.
 
 ## O que o programa NÃO é
 
@@ -43,6 +43,11 @@ versões.
     pupila mesópica/escotópica padronizada; circunferências e anéis são centrados no vértice. Com ΔK < 0,50 D o
     eixo varia entre zonas e capturas (marcado na tabela). A tabela é **dado**, não recomendação: a escolha do K para
     cálculo de LIO ou para cirurgia refrativa é do cirurgião.
+
+12. **Chord mu aparente** (0.4.0): distância do centro da pupila desta captura ao vértice do TMS. Usa a pupila sob a
+    iluminação do Plácido (não pupilometria fotópica/mesópica padronizada), depende de boa fixação no alvo e não foi
+    comparado com Pentacam, iTrace ou OPD (aparelhos diferentes dão valores diferentes). É dado, não critério de
+    indicação de LIO.
 
 ## Dados pessoais
 

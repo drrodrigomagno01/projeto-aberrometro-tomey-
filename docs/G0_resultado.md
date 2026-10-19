@@ -69,7 +69,7 @@ contra SimK1 Ang. e eixo Fourier 6 mm do próprio TMS:
 Com astigmatismo ≥ 1,6 D a diferença fica dentro de 2° em 4 de 4 exames; espelhamento (180° − θ) ou rotação de
 90° dariam 97°/70°/92°/91° e 173°/20°/178°/179° — descartados. **Convenção angular fechada.**
 
-**Magnitude.** Cilindro refrativo calculado (n = 1,376, zona de 4 mm) / CYL ceratométrico do TMS (SimK, ≈ 3 mm):
+**Magnitude.** Cilindro refrativo calculado (n = 1,376, zona de 4 mm) / CYL ceratométrico do TMS (SimK, anéis 6–8, ≈ 2,1–2,9 mm):
 2,78/2,48 = 1,12; 2,47/2,09 = 1,18; 1,89/1,69 = 1,12; 1,91/1,65 = 1,16 — compatível com o fator 0,376/0,3375 = 1,114
 mais a diferença de zona. O "6mm Reg. Astig." do XREF é a *amplitude* de Fourier (≈ metade do cilindro).
 
