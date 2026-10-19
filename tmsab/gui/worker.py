@@ -19,8 +19,12 @@ class AnalysisWorker(QThread):
     finished_all = Signal(bool)                       # True se cancelado
 
     def __init__(self, jobs: list[tuple], profiles: list[OpticalProfile], recon: ReconstructionConfig,
-                 qc: QualityConfig | None = None, adapter_profile: str = "auto", parent: Any = None):
+                 qc: QualityConfig | None = None, adapter_profile: str = "auto", parent: Any = None,
+                 profile_request: dict | None = None):
+        """`profile_request` (opcional): {diameters, centers, order, measured_pupil, reference} — os perfis são
+        então montados por exame (inclui o da pupila medida); sem ele, usa-se a lista `profiles`."""
         super().__init__(parent)
+        self.profile_request = profile_request
         # jobs: (chave, diretório) ou (chave, diretório, exam_id, perfil)
         norm = []
         for j in jobs:
@@ -61,7 +65,13 @@ class AnalysisWorker(QThread):
             except Exception as e:  # noqa: BLE001 — nunca derrubar a thread
                 self.package_failed.emit(key, f"erro inesperado na importação: {type(e).__name__}: {e}")
                 continue
-            steps = len(self.profiles) + 3
+            profiles = self.profiles
+            if self.profile_request:
+                from ..pipeline import profiles_for_exam
+                pr = self.profile_request
+                profiles = profiles_for_exam(exam, pr["diameters"], pr["centers"], pr["order"],
+                                             measured_pupil=pr.get("measured_pupil", True), reference=pr.get("reference", "paraxial_media_principais"))
+            steps = len(profiles) + 3
             counter = {"k": 0}
 
             def _progress(msg: str, _base=base, _span=span, _label=label):
@@ -69,7 +79,7 @@ class AnalysisWorker(QThread):
                 self.progress.emit(min(99, _base + int(_span * counter["k"] / steps)), f"{_label}: {msg}")
 
             try:
-                analysis, rec = run_analysis(exam, self.profiles, self.recon, self.qc, progress=_progress,
+                analysis, rec = run_analysis(exam, profiles, self.recon, self.qc, progress=_progress,
                                              should_cancel=self._should_cancel, with_maps=True)
             except Cancelled:
                 cancelled = True

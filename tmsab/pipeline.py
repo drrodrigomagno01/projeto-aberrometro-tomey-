@@ -51,12 +51,39 @@ def validate_exam(exam: NormalizedExam) -> list[str]:
     return notes
 
 
-def default_profiles(diameters=(4.0, 6.0), centers=("vertice", "pupila"), order: int = 6) -> list[OpticalProfile]:
+DEFAULT_DIAMETERS = (3.0, 4.0, 5.0, 6.0)        # "botões" de diâmetro pupilar da visualização
+
+
+def default_profiles(diameters=DEFAULT_DIAMETERS, centers=("vertice", "pupila"), order: int = 6) -> list[OpticalProfile]:
     out = []
     for c in centers:
         for d in diameters:
             out.append(OpticalProfile(name=f"anterior_v1_{c}_{d:g}mm", center_mode=c, diameter_mm=float(d), zernike_order=order))
     return out
+
+
+def measured_pupil_profile(exam: NormalizedExam, order: int = 6) -> Optional[OpticalProfile]:
+    """Perfil centrado na pupila com o diâmetro pupilar medido pelo TMS (PUP), arredondado a 0,01 mm; None sem pupila."""
+    p = exam.pupil
+    if p.state != "registrada" or not p.diameter or p.center_x is None:
+        return None
+    d = round(float(p.diameter), 2)
+    if d < 2.0 or d > 8.5:
+        return None
+    return OpticalProfile(name=f"anterior_v1_pupila_medida_{d:.2f}mm", center_mode="pupila", diameter_mm=d, zernike_order=order)
+
+
+def profiles_for_exam(exam: NormalizedExam, diameters=DEFAULT_DIAMETERS, centers=("vertice", "pupila"), order: int = 6,
+                      measured_pupil: bool = True, reference: str = "paraxial_media_principais") -> list[OpticalProfile]:
+    """Perfis padrão + (opcional) o da pupila medida, sem duplicar diâmetros já pedidos."""
+    profs = default_profiles(diameters, centers, order)
+    if measured_pupil and "pupila" in centers:
+        mp = measured_pupil_profile(exam, order)
+        if mp is not None and not any(abs(p.diameter_mm - mp.diameter_mm) < 0.005 and p.center_mode == "pupila" for p in profs):
+            profs.append(mp)
+    for p in profs:
+        p.reference = reference
+    return profs
 
 
 def analysis_center(exam: NormalizedExam, profile: OpticalProfile) -> Optional[tuple[float, float]]:

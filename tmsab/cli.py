@@ -22,10 +22,13 @@ import numpy as np
 from . import CORE_VERSION
 
 
-def _profiles_from_args(args):
-    from .pipeline import default_profiles
+def _profiles_from_args(args, exam=None):
+    from .pipeline import default_profiles, profiles_for_exam
     diam = [float(v) for v in args.diameters.split(",")]
     cent = [v.strip() for v in args.centers.split(",")]
+    if exam is not None:
+        return profiles_for_exam(exam, diam, cent, args.order, measured_pupil=not getattr(args, "sem_pupila_medida", False),
+                                 reference=args.reference)
     profs = default_profiles(diam, cent, args.order)
     for p in profs:
         p.reference = args.reference
@@ -142,7 +145,7 @@ def cmd_analyze(args):
             print(f"IMPORTAÇÃO INVÁLIDA ({exam_id or args.dir}): {e}")
             rc = 2
             continue
-        an, _ = analyze_exam(exam, _profiles_from_args(args), _recon_from_args(args), with_maps=not args.no_pdf)
+        an, _ = analyze_exam(exam, _profiles_from_args(args, exam), _recon_from_args(args), with_maps=not args.no_pdf)
         _print_analysis(an)
         name = None if (args.sem_nome or exam.bundle.synthetic) else patient_display_name(args.dir, an.identity.exam_id)
         paths = export_all(exam, an, out, patient_name=name)
@@ -183,7 +186,7 @@ def cmd_batch(args):
             tag = name + (f"_{exam_id}" if exam_id else "")
             try:
                 exam = import_tms_bundle(d, _profile_arg(args), exam_id=exam_id)
-                an, _ = analyze_exam(exam, _profiles_from_args(args), _recon_from_args(args), with_maps=not args.no_pdf)
+                an, _ = analyze_exam(exam, _profiles_from_args(args, exam), _recon_from_args(args), with_maps=not args.no_pdf)
                 export_all(exam, an, os.path.join(args.out, tag))
                 rows.extend(_long_rows(an))
                 n_ok += 1
@@ -326,7 +329,8 @@ def build_parser():
 
     def common(sp):
         sp.add_argument("--profile", default="auto", help="perfil do adaptador (auto = detectar pelo formato; nome ou caminho JSON)")
-        sp.add_argument("--diameters", default="4,6")
+        sp.add_argument("--diameters", default="3,4,5,6")
+        sp.add_argument("--sem-pupila-medida", action="store_true", help="não acrescentar o perfil com o diâmetro pupilar medido (PUP)")
         sp.add_argument("--centers", default="vertice,pupila")
         sp.add_argument("--order", type=int, default=6)
         sp.add_argument("--reference", default="paraxial_media_principais", choices=["paraxial_media_principais", "refoco_rms"])

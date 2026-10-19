@@ -155,14 +155,10 @@ TOPO_MAPS = (
 
 
 def _closed_polar_grid(s, values: np.ndarray):
-    """Coordenadas fechadas em 360° para pcolormesh; pontos sem coordenada recebem a posição nominal do anel."""
-    rn = np.nanmean(s.r, axis=1)
-    rr = np.where(np.isfinite(s.r), s.r, rn[:, None])
-    th = np.radians(s.theta_deg)[None, :]
-    X, Y = rr * np.cos(th), rr * np.sin(th)
-    V = np.where(np.isfinite(values) & np.isfinite(rr), values, np.nan)
-    X = np.concatenate([X, X[:, :1]], axis=1); Y = np.concatenate([Y, Y[:, :1]], axis=1); V = np.concatenate([V, V[:, :1]], axis=1)
-    return X, Y, np.ma.masked_invalid(V)
+    """Coordenadas fechadas em 360° para pcolormesh; pontos sem coordenada recebem a posição nominal do anel;
+    centro preenchido com a média do primeiro anel (ver topo._grid_closed)."""
+    from .topo import _grid_closed
+    return _grid_closed(s, values, fill_center=True)
 
 
 def _step_scale(v: np.ndarray, step: float, min_span: float) -> tuple[float, float]:
@@ -283,11 +279,12 @@ def _data_pt(iso: Optional[str]) -> str:
 
 
 def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Optional[Figure] = None,
-                              patient_name: Optional[str] = None) -> Figure:
+                              patient_name: Optional[str] = None, view=None) -> Figure:
     """Página única A4 (retrato) com tudo: identificação, índices do TMS, 4 mapas topográficos (axial, tangencial,
     refrativo, elevação), frente de onda (total e alta ordem), coeficientes de Zernike e tabelas de resultados.
     `fig` (opcional) é limpa e reutilizada — usado pelo canvas da interface. `patient_name` (opcional, lido do
-    XREF a pedido do usuário) aparece SÓ nesta página impressa — nunca em JSON/CSV."""
+    XREF a pedido do usuário) aparece SÓ nesta página impressa — nunca em JSON/CSV. `view` (topo.ViewOptions):
+    escala, zona, diâmetro pupilar e centro escolhidos nos "botões" — a página imprime o que está na tela."""
     from . import CORE_VERSION
     if fig is None:
         fig = Figure(figsize=(8.27, 11.69), dpi=100)
@@ -324,89 +321,84 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
     if analysis.synthetic:
         fig.text(0.5, 0.925, "*** EXAME SINTÉTICO — gerado por software; não corresponde a um paciente ***", fontsize=8, color="#a00", ha="center", va="top", weight="bold")
 
-    # ---- linha 1: topografia (4 mapas quadrados com barra de cor própria)
-    y1, w1, pitch = 0.775, 0.158, 0.236
-    titles = {"DIO": "Potência axial (D)", "ROC": "Potência tangencial (D)", "POW": "Potência refrativa (D)"}
-    for i, (role, _, _) in enumerate(TOPO_MAPS):
-        x = 0.045 + i * pitch
-        ax = _sq(fig, x, y1, w1)
-        cax = fig.add_axes([x + w1 + 0.005, y1, 0.010, w1 * 8.27 / 11.69])
-        plot_topo_map(ax, exam, role, title=titles[role], cax=cax, fontsize=7.2)
-        ax.set_xlabel("x (mm)", fontsize=6)
-        if i == 0:
-            ax.set_ylabel("y (mm)", fontsize=6)
-        else:
-            ax.set_yticklabels([])
-    x = 0.045 + 3 * pitch
-    ax = _sq(fig, x, y1, w1)
-    cax = fig.add_axes([x + w1 + 0.005, y1, 0.010, w1 * 8.27 / 11.69])
-    plot_elevation_bfs(ax, exam, cax=cax, fontsize=7.2, title=None)
-    ax.set_title(ax.get_title().replace("Elevação vs. esfera de melhor ajuste", "Elevação vs. esfera"), fontsize=7.2)
-    ax.set_xlabel("x (mm)", fontsize=6); ax.set_yticklabels([])
-    fig.text(0.045, y1 + w1 * 8.27 / 11.69 + 0.028, "TOPOGRAFIA (Data Tables do TMS; círculos 3 e 6 mm; pupila tracejada; pontos interpolados pelo TMS incluídos)",
-             fontsize=6.8, weight="bold", color="#333", va="bottom")
+    # ---- linha 1: mapa axial no estilo do TMS (grande, escala Standard, meridianos, zonas, pupila) + 4 mapas pequenos
+    from .topo import ViewOptions, draw_tms_legend, draw_tms_map, select_profile
+    vo = view or ViewOptions()
+    y1, w1 = 0.60, 0.44                       # mapa grande: quadrado de 0,44 da largura
+    h1 = w1 * 8.27 / 11.69
+    axb = fig.add_axes([0.03, y1, w1, h1])
+    big = ViewOptions(kind="axial", scale=vo.scale, zone_mm=vo.zone_mm, pupil_mm=vo.pupil_mm, center=vo.center, annotate=True, protractor=True)
+    pm_big, levels_big, _ = draw_tms_map(axb, exam, analysis, big, title=False, fontsize=6.3)
+    axl = fig.add_axes([0.04, y1 - 0.028, 0.42, 0.022])
+    if pm_big is not None:
+        draw_tms_legend(axl, levels_big, big.scale, "D", fontsize=4.6)
+    else:
+        axl.set_axis_off()
+    fig.text(0.03, y1 + h1 + 0.004, "TOPOGRAFIA — potência axial, escala " + ("Standard do TMS (40,5–53,0 D, 0,5 D)" if big.scale == "tms" else "ajustada ao exame")
+             + (f", zona {big.zone_mm:g} mm" if big.zone_mm else "") + "; meridianos íngreme/plano com as potências a 3/5/7 mm; pupila tracejada",
+             fontsize=6.3, weight="bold", color="#333", va="bottom")
+    # 2×2 à direita: tangencial, refrativa, elevação, frente de onda total (diâmetro pupilar escolhido)
+    sw = 0.2; sh = sw * 8.27 / 11.69
+    grid = [("tangencial", 0.52, y1 + h1 - sh - 0.018), ("refrativa", 0.775, y1 + h1 - sh - 0.018), ("elevacao", 0.52, y1 - 0.004), ("frente_onda", 0.775, y1 - 0.004)]
+    for kind, x, y in grid:
+        ax = fig.add_axes([x, y, sw, sh])
+        o_ = ViewOptions(kind=kind, scale=vo.scale, zone_mm=vo.zone_mm, pupil_mm=vo.pupil_mm, center=vo.center, annotate=False, protractor=False)
+        pm, lv, _ = draw_tms_map(ax, exam, analysis, o_, title=True, fontsize=5.6)
+        if pm is not None:
+            cax = fig.add_axes([x + sw + 0.004, y + 0.01, 0.008, sh - 0.02])
+            cb = fig.colorbar(pm, cax=cax); cb.ax.tick_params(labelsize=4.8)
+            if kind in ("tangencial", "refrativa") and lv is not None and len(lv) > 10:
+                cb.set_ticks(lv[::4])
 
-    # ---- linha 2: frente de onda do melhor perfil disponível (vértice 6 mm de preferência)
-    order = sorted(analysis.wavefronts, key=lambda w: (w.validity != "disponivel", w.profile.center_mode != "vertice", -w.profile.diameter_mm))
-    wf = order[0] if order and order[0].validity == "disponivel" else None
-    y2, w2 = 0.555, 0.2
-    ax1 = _sq(fig, 0.045, y2, w2); cax1 = fig.add_axes([0.045 + w2 + 0.006, y2, 0.011, w2 * 8.27 / 11.69])
-    ax2 = _sq(fig, 0.345, y2, w2); cax2 = fig.add_axes([0.345 + w2 + 0.006, y2, 0.011, w2 * 8.27 / 11.69])
-    ax3 = fig.add_axes([0.665, y2, 0.315, w2 * 8.27 / 11.69])
+    # ---- linha 2: alta ordem + Zernike do perfil escolhido (diâmetro pupilar / centro)
+    wf = select_profile(analysis, vo) if analysis.wavefronts else None
+    y2 = 0.415; w2 = 0.19; h2 = w2 * 8.27 / 11.69
+    ax2 = fig.add_axes([0.06, y2, w2, h2]); cax2 = fig.add_axes([0.06 + w2 + 0.005, y2 + 0.01, 0.009, h2 - 0.02])
+    ax3 = fig.add_axes([0.335, y2, 0.275, h2])
     if wf is not None and wf.map_grid is not None:
         a = wf.profile.radius_mm
-        Z = wf.map_grid["W"]; vl = max(float(np.nanmax(np.abs(Z))), 1e-3)
-        im = ax1.imshow(Z, origin="lower", extent=[-a, a, -a, a], cmap=DIV_CMAP, vmin=-vl, vmax=vl, interpolation="nearest")
-        _circle(ax1, a, color="black", lw=0.8); ax1.set_aspect("equal")
-        ax1.set_title(f"Frente de onda total W (µm) — {wf.profile.diameter_mm:g} mm, centro {wf.profile.center_mode}", fontsize=7.2)
-        cb = fig.colorbar(im, cax=cax1); cb.ax.tick_params(labelsize=6); cb.set_label("µm (+ adiantada)", fontsize=6)
         Zh = hoa_map(wf)
         if Zh is not None:
             vl2 = max(float(np.nanmax(np.abs(Zh))), 1e-3)
             im2 = ax2.imshow(Zh, origin="lower", extent=[-a, a, -a, a], cmap=DIV_CMAP, vmin=-vl2, vmax=vl2, interpolation="bilinear")
             _circle(ax2, a, color="black", lw=0.8); ax2.set_aspect("equal")
-            ax2.set_title(f"Alta ordem (n ≥ 3) (µm) — RMS {wf.metrics.get('rms_hoa_n3plus', float('nan')):.3f} µm", fontsize=7.2)
-            cb2 = fig.colorbar(im2, cax=cax2); cb2.ax.tick_params(labelsize=6); cb2.set_label("µm", fontsize=6)
-        for ax in (ax1, ax2):
-            ax.tick_params(labelsize=6); ax.set_xlabel("x (mm) rel. ao centro", fontsize=6)
-        ax1.set_ylabel("y (mm)", fontsize=6); ax2.set_yticklabels([])
-        plot_zernike_bars(ax3, wf, title=f"Coeficientes de Zernike OSA (n ≥ 2, µm) — {wf.profile.diameter_mm:g} mm", annotate=False)
-        ax3.tick_params(labelsize=5.5); ax3.yaxis.label.set_size(6); ax3.title.set_size(7.2)
+            ax2.set_title(f"Alta ordem (n ≥ 3) — {wf.profile.diameter_mm:g} mm, {wf.profile.center_mode} — RMS {wf.metrics.get('rms_hoa_n3plus', float('nan')):.3f} µm", fontsize=6)
+            cb2 = fig.colorbar(im2, cax=cax2); cb2.ax.tick_params(labelsize=5); cb2.set_label("µm", fontsize=5)
+            ax2.tick_params(labelsize=5); ax2.set_xlabel("x (mm) rel. ao centro", fontsize=5); ax2.set_ylabel("y (mm)", fontsize=5)
+        plot_zernike_bars(ax3, wf, title=f"Coeficientes de Zernike OSA (n ≥ 2, µm) — {wf.profile.diameter_mm:g} mm, centro {wf.profile.center_mode}", annotate=False)
+        ax3.tick_params(labelsize=5); ax3.yaxis.label.set_size(5.5); ax3.title.set_size(6)
     else:
-        for ax in (ax1, ax2, ax3):
-            ax.text(0.5, 0.5, "frente de onda indisponível\n(ver motivos na tabela)", ha="center", va="center", fontsize=7, transform=ax.transAxes)
+        for ax in (ax2, ax3):
+            ax.text(0.5, 0.5, "frente de onda indisponível\n(ver motivos na tabela)", ha="center", va="center", fontsize=6.5, transform=ax.transAxes)
             ax.set_axis_off()
-        for c in (cax1, cax2):
-            c.set_axis_off()
-    fig.text(0.045, y2 + w2 * 8.27 / 11.69 + 0.028, "FRENTE DE ONDA DA SUPERFÍCIE ANTERIOR (traçado de raios, n 1,000 → 1,376; referência paraxial)",
-             fontsize=6.8, weight="bold", color="#333", va="bottom")
+        cax2.set_axis_off()
 
     # ---- linha 3: geometria/pupila/astigmatismo (esquerda) e tabela de perfis (direita)
     geo_lines = [
         ("GEOMETRIA RECONSTRUÍDA", True),
-        (f"R = {g.conic_R_mm:.3f} mm    Q = {g.conic_Q:+.3f}    K equiv. {g.k_mean_D_keratometric:.2f} D", False),
-        (f"resíduo RMS {g.residual_rms_mm*1000:.2f} µm (máx {g.residual_max_mm*1000:.2f}); {g.method}, ordem {g.surface_order}", False),
-        (f"{g.n_points_used} pontos; raio medido {g.outer_radius_mm:.2f} mm; lacuna central {g.central_gap_mm:.2f} mm", False),
+        (f"R = {g.conic_R_mm:.3f} mm   Q = {g.conic_Q:+.3f}   K eq. {g.k_mean_D_keratometric:.2f} D", False),
+        (f"resíduo RMS {g.residual_rms_mm*1000:.2f} µm (máx {g.residual_max_mm*1000:.2f}); ordem {g.surface_order}", False),
+        (f"{g.n_points_used} pts; raio medido {g.outer_radius_mm:.2f} mm; lacuna {g.central_gap_mm:.2f} mm", False),
         ("", False),
         ("PUPILA (PUP)", True),
     ]
     p = analysis.pupil
     if p.state == "registrada":
-        geo_lines += [(f"centro ({p.center_x:+.2f}, {p.center_y:+.2f}) mm rel. ao vértice; diâmetro {p.diameter:.2f} mm" if p.diameter else f"centro ({p.center_x:+.2f}, {p.center_y:+.2f}) mm", False)]
+        geo_lines += [(f"centro ({p.center_x:+.2f}, {p.center_y:+.2f}) mm; diâmetro {p.diameter:.2f} mm" if p.diameter else f"centro ({p.center_x:+.2f}, {p.center_y:+.2f}) mm", False)]
     else:
         geo_lines += [("não detectada nesta captura — perfis pupilares indisponíveis", False)]
-    geo_lines += [("", False), ("ASTIGMATISMO CORNEANO (refrativo equivalente, centro no vértice)", True)]
+    geo_lines += [("", False), ("ASTIGMATISMO (refrativo equiv., centro no vértice)", True)]
     for w in analysis.wavefronts:
         if w.validity == "disponivel" and w.profile.center_mode == "vertice" and w.metrics.get("cilindro_equivalente_D") is not None:
             ax_ = w.metrics["eixo_equivalente_deg"]
-            geo_lines.append((f"zona {w.profile.diameter_mm:g} mm: {w.metrics['cilindro_equivalente_D']:+.2f} D × {ax_:.0f}°  (meridiano mais curvo {(ax_ - 90) % 180:.0f}°)", False))
+            geo_lines.append((f"{w.profile.diameter_mm:g} mm: {w.metrics['cilindro_equivalente_D']:+.2f} D × {ax_:.0f}° (mais curvo {(ax_ - 90) % 180:.0f}°)", False))
     if ix:
         geo_lines.append((f"TMS SimK: CYL {iv('CYL')} D, meridiano mais curvo {iv('SimK1 Ang.', '{:.0f}')}°", False))
-    y = 0.50
+    y = 0.552
     for ln, bold in geo_lines:
-        fig.text(0.045, y, ln, fontsize=6.6, va="top", weight="bold" if bold else "normal", color="#111" if bold else "#222")
-        y -= 0.0128
-    axt = fig.add_axes([0.045, 0.21, 0.935, 0.105]); axt.set_axis_off()
+        fig.text(0.635, y, ln, fontsize=5.9, va="top", weight="bold" if bold else "normal", color="#111" if bold else "#222")
+        y -= 0.0112
+    axt = fig.add_axes([0.045, 0.175, 0.935, 0.15]); axt.set_axis_off()
     cols = ["Perfil", "Estado", "SA c(4,0)", "|Coma|", "|Trefoil|", "RMS HOA (n≥3)", "SA 2ª c(6,0)", "Cil. equiv. × eixo", "Defocus c(2,0)", "Raios"]
     rows, reasons = [], []
     for w in analysis.wavefronts:
@@ -421,20 +413,27 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
                      f"{m['rms_hoa_n3plus']:.3f}", f"{m.get('sa_secundaria_c60', float('nan')):+.3f}",
                      (f"{cil:+.2f} D × {eixo:.0f}°" if cil is not None and np.isfinite(cil) else "—"),
                      f"{m.get('defocus_c20', float('nan')):+.2f}", f"{w.n_valid_rays}/{w.n_rays}"])
-    fig.text(0.045, 0.322, "RESULTADOS POR PERFIL (µm; Zernike OSA ortonormal; abertura no plano corneano)", fontsize=6.8, weight="bold", color="#333", va="bottom")
+    fig.text(0.045, 0.332, "RESULTADOS POR PERFIL — diâmetros pupilares 3/4/5/6 mm e pupila medida, centro no vértice e na pupila (µm; Zernike OSA ortonormal)", fontsize=6.3, weight="bold", color="#333", va="bottom")
     if rows:
         tb = axt.table(cellText=rows, colLabels=cols, loc="upper center", cellLoc="center",
                        colWidths=[0.11, 0.11, 0.08, 0.08, 0.08, 0.1, 0.09, 0.14, 0.1, 0.09])
-        tb.auto_set_font_size(False); tb.set_fontsize(6.2); tb.scale(1.0, 1.15)
+        tb.auto_set_font_size(False); tb.set_fontsize(5.6); tb.scale(1.0, 1.0)
         for (r_, c_), cell in tb.get_celld().items():
             cell.set_linewidth(0.4)
             if r_ == 0:
                 cell.set_facecolor("#eef1f7"); cell.set_text_props(weight="bold", fontsize=5.8)
             elif c_ == 1:
                 cell.set_text_props(color="#1b5e20" if rows[r_ - 1][1] == "DISPONÍVEL" else "#8B0000", weight="bold")
-    yy = 0.205
-    for rs in reasons[:3]:
-        fig.text(0.045, yy, rs[:170], fontsize=5.8, va="top", color="#8B0000"); yy -= 0.012
+    yy = 0.168
+    seen = set()
+    for rs in reasons:
+        key = rs.split(": ", 1)[-1]
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(seen) > 2:
+            break
+        fig.text(0.045, yy, ("* " + key)[:170], fontsize=5.6, va="top", color="#8B0000"); yy -= 0.011
     fig.text(0.045, yy, "Cilindro refrativo equivalente (n = 1,376) a partir de c(2,±2) — não é ceratometria; eixo = meridiano do cilindro negativo. "
              "RMS HOA = n ≥ 3. Limites de disponibilidade provisórios (não clínicos); nenhuma faixa de normalidade é atribuída.",
              fontsize=5.8, va="top", color="#333", wrap=True); yy -= 0.026

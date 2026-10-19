@@ -31,6 +31,16 @@ table.exames th { background:#eef1f7; }
 .toolbar a, .toolbar button { font-size:12px; padding:4px 10px; }
 .small { font-size:12px; color:var(--muted); }
 .privacy { font-size:12px; color:#2b4a2f; background:#eef7ee; border:1px solid #cde3cf; border-radius:6px; padding:8px 10px; }
+.topo-panel { border:1px solid #ccd; border-radius:8px; padding:8px 12px; margin:8px 0 12px; background:#fafbfe; }
+.topo-panel h3 { font-size:13.5px; margin:2px 0 6px; }
+.controls { display:flex; flex-wrap:wrap; gap:6px 16px; margin-bottom:6px; }
+.seg { display:flex; align-items:center; gap:3px; flex-wrap:wrap; }
+.seglab { font-size:12px; color:#333; margin-right:4px; }
+.segbtn { font-size:12px; padding:3px 9px; border:1px solid #9ab; background:#fff; color:#1a4f8a; border-radius:5px; cursor:pointer; }
+.segbtn.on { background:#1a4f8a; color:#fff; border-color:#1a4f8a; }
+.topo-body { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+.topo-img { width:520px; max-width:100%; border:1px solid #dde; background:#fff; }
+.topo-info { flex:1; min-width:280px; font-size:11.5px; white-space:pre-wrap; background:#fff; border:1px solid #e3e3e8; padding:8px; margin:0; }
 {{REPORT_CSS}}
 @media print { .app > .card, .app > h1, .app > .sub, .toolbar, .no-print { display:none !important; } .app { max-width:none; padding:0; } body { background:#fff; } }
 </style>
@@ -51,8 +61,7 @@ table.exames th { background:#eef1f7; }
     <div id="drop" class="drop">ou arraste a pasta do paciente para cá</div>
     <div class="row" style="margin-top:10px">
       <label class="opt">Centro: <select id="optCenter"><option value="ambos">vértice e pupila</option><option value="vertice">vértice</option><option value="pupila">pupila</option></select></label>
-      <label class="opt"><input type="checkbox" id="d4" checked> 4 mm</label>
-      <label class="opt"><input type="checkbox" id="d6" checked> 6 mm</label>
+      <label class="opt">Diâmetros pupilares: <input type="checkbox" id="d3" checked> 3 <input type="checkbox" id="d4" checked> 4 <input type="checkbox" id="d5" checked> 5 <input type="checkbox" id="d6" checked> 6 mm <input type="checkbox" id="dPup" checked> pupila medida</label>
       <label class="opt">Zernike ordem <input type="number" id="optOrder" value="6" min="4" max="8" style="width:48px"></label>
       <label class="opt"><input type="checkbox" id="optPdf" checked> gerar também PDF por exame</label>
       <label class="opt"><input type="checkbox" id="optName" checked> nome do paciente (XREF) e data no relatório impresso</label>
@@ -100,6 +109,10 @@ function setupEngine(post) {
     "        _js_progress(str(msg))",
     "    r = tmsab.web.analyze_exam_html(d, exam or None, json.loads(opts), progress=prog)",
     "    return json.dumps(r, ensure_ascii=False)",
+    "def _topo(d, exam, view):",
+    "    return json.dumps(tmsab.web.topo_png(d, exam or None, json.loads(view)), ensure_ascii=False)",
+    "def _completo(d, exam, view, include_name):",
+    "    return json.dumps(tmsab.web.completo_png(d, exam or None, json.loads(view), bool(include_name)), ensure_ascii=False)",
     "tmsab.__version__"
   ].join("\n");
   async function loadScriptAny(url) {
@@ -141,6 +154,15 @@ function setupEngine(post) {
       } catch (e) { post({ type: "error", dir: msg.dir, text: String(e) }); }
       return;
     }
+    if (msg.type === "topo" || msg.type === "completo") {
+      try {
+        const fn = msg.type === "topo" ? "_topo" : "_completo";
+        const extra = msg.type === "completo" ? ", " + (msg.include_name ? "True" : "False") : "";
+        const r = pyodide.runPython(fn + "(" + JSON.stringify(msg.base) + ", " + JSON.stringify(msg.exam || "") + ", " + JSON.stringify(JSON.stringify(msg.view || {})) + extra + ")");
+        post({ type: msg.type, key: msg.key, result: JSON.parse(r) });
+      } catch (e) { post({ type: msg.type, key: msg.key, result: { error: String(e) } }); }
+      return;
+    }
     if (msg.type === "analyze") {
       try {
         const r = pyodide.runPython("_analyze(" + JSON.stringify(msg.base) + ", " + JSON.stringify(msg.exam || "") + ", " + JSON.stringify(JSON.stringify(msg.opts)) + ")");
@@ -159,6 +181,7 @@ let engineSend = null, engineReady = false;
 const pending = [];          // fila de exames a analisar
 let busy = false;
 const results = {};          // chave dir#exam → resultado
+const pendingBase = {};      // chave → pasta no sistema de arquivos do motor
 
 function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls || ""; }
 function b64ToBytes(b64) { const bin = atob(b64); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
@@ -171,6 +194,8 @@ function onEngineMessage(m) {
   if (m.type === "listed") { onListed(m); return; }
   if (m.type === "error") { setStatus("Erro na pasta " + m.dir + ": " + m.text, "err"); busy = false; next(); return; }
   if (m.type === "result") { onResult(m); return; }
+  if (m.type === "topo") { onTopo(m); return; }
+  if (m.type === "completo") { onCompleto(m); return; }
 }
 
 function startEngine() {
@@ -269,8 +294,9 @@ drop.ondrop = async (e) => {
 function currentOptions() {
   const c = $("optCenter").value;
   const centers = c === "ambos" ? ["vertice", "pupila"] : [c];
-  const diameters = []; if ($("d4").checked) diameters.push(4.0); if ($("d6").checked) diameters.push(6.0);
-  return { centers, diameters: diameters.length ? diameters : [6.0], zernike_order: parseInt($("optOrder").value || "6", 10), maps: true, pdf: $("optPdf").checked, include_name: $("optName").checked };
+  const diameters = []; for (const [id, d] of [["d3", 3.0], ["d4", 4.0], ["d5", 5.0], ["d6", 6.0]]) if ($(id).checked) diameters.push(d);
+  return { centers, diameters: diameters.length ? diameters : [6.0], zernike_order: parseInt($("optOrder").value || "6", 10), maps: true, pdf: $("optPdf").checked,
+           include_name: $("optName").checked, measured_pupil: $("dPup").checked };
 }
 function fmtDate(iso) { return iso ? iso.replace("T", " ") : "—"; }
 function onListed(m) {
@@ -286,6 +312,7 @@ function onListed(m) {
     tr.innerHTML = "<td>" + esc(e.patient_key || "—") + "</td><td>" + esc(e.exam_id || "(pacote)") + "</td><td>" + esc(e.eye || "?") + "</td><td>" + esc(e.capture_index != null ? e.capture_index : "—") + "</td><td>" + esc(fmtDate(e.acquired_at)) + "</td><td>" + esc(simk) + "</td><td class='st'>na fila</td>";
     $("examRows").appendChild(tr);
     pending.push({ key, dir: m.dir, base: m.base, exam: e.exam_id || "" });
+    pendingBase[key] = m.base;
   }
   setStatus(pending.length + " exame(s) na fila…");
   next();
@@ -327,9 +354,84 @@ function onResult(m) {
   const bp = document.createElement("button"); bp.textContent = "Imprimir relatório detalhado deste exame"; bp.onclick = () => printOnly(art, false); tb.appendChild(bp);
   art.insertBefore(tb, art.firstChild);
   $("report").appendChild(art);
+  buildTopoPanel(art, key, m.dir, results[key], r);
   $("btnPrint").disabled = false; $("btnSaveHtml").disabled = false; $("btnPrintCompleto").disabled = false;
   setStatus("Exame " + r.exam_id + " " + (r.eye || "") + " calculado (análise " + r.analysis_id.slice(0, 8) + "…).");
   next();
+}
+// ----------------------------------------------------------------------------- topografia interativa (filtros)
+const VIEW_DEFAULTS = { kind: "axial", scale: "tms", zone_mm: null, pupil_mm: null, center: "vertice" };
+const panels = {};
+function seg(label, options, state, prop, onChange) {
+  const wrap = document.createElement("div"); wrap.className = "seg";
+  const lab = document.createElement("span"); lab.className = "seglab"; lab.textContent = label; wrap.appendChild(lab);
+  const btns = [];
+  for (const [text, value] of options) {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = text; b.className = "segbtn" + (state[prop] === value ? " on" : "");
+    b.onclick = () => { state[prop] = value; btns.forEach((x) => x.classList.toggle("on", x === b)); onChange(); };
+    btns.push(b); wrap.appendChild(b);
+  }
+  return wrap;
+}
+function buildTopoPanel(art, key, dir, res, r) {
+  const base = pendingBase[key] || res.base;
+  const state = Object.assign({}, VIEW_DEFAULTS);
+  const panel = document.createElement("section"); panel.className = "topo-panel no-print";
+  panel.innerHTML = "<h3>Topografia (estilo TMS) — escolha a visualização</h3>";
+  const controls = document.createElement("div"); controls.className = "controls";
+  const refresh = () => { setStatus("desenhando " + state.kind + "…"); engineSend({ type: "topo", key, base, exam: r.exam_id, view: state }); };
+  controls.appendChild(seg("Mapa", [["Axial", "axial"], ["Tangencial", "tangencial"], ["Refrativa", "refrativa"], ["Elevação", "elevacao"], ["Frente de onda", "frente_onda"], ["Alta ordem", "alta_ordem"]], state, "kind", refresh));
+  controls.appendChild(seg("Escala", [["Standard TMS (40,5–53 D)", "tms"], ["Ajustada ao exame", "auto"]], state, "scale", refresh));
+  controls.appendChild(seg("Zona", [["tudo", null], ["3 mm", 3], ["5 mm", 5], ["7 mm", 7]], state, "zone_mm", refresh));
+  controls.appendChild(seg("Diâmetro pupilar", [["medida (PUP)", null], ["3 mm", 3], ["4 mm", 4], ["5 mm", 5], ["6 mm", 6]], state, "pupil_mm", refresh));
+  controls.appendChild(seg("Centro (frente de onda)", [["vértice", "vertice"], ["pupila", "pupila"]], state, "center", refresh));
+  panel.appendChild(controls);
+  const body = document.createElement("div"); body.className = "topo-body";
+  const img = document.createElement("img"); img.className = "topo-img"; img.alt = "visualização"; body.appendChild(img);
+  const info = document.createElement("pre"); info.className = "topo-info"; info.textContent = "…"; body.appendChild(info);
+  panel.appendChild(body);
+  const tools = document.createElement("div"); tools.className = "toolbar";
+  const ba = document.createElement("button"); ba.textContent = "Aplicar estes filtros à página de resultado completo (impressão)";
+  ba.onclick = () => { setStatus("atualizando a página de resultado completo…"); engineSend({ type: "completo", key, base, exam: r.exam_id, view: state, include_name: $("optName").checked }); };
+  tools.appendChild(ba);
+  const bi = document.createElement("button"); bi.textContent = "Imprimir esta visualização"; bi.onclick = () => printImage(img.src); tools.appendChild(bi);
+  panel.appendChild(tools);
+  const fc = art.querySelector("figure.completo");
+  if (fc) fc.insertAdjacentElement("afterend", panel); else art.appendChild(panel);
+  panels[key] = { state, img, info, art };
+  refresh();
+}
+function fmt(v, d) { return v == null ? "—" : Number(v).toFixed(d); }
+function onTopo(m) {
+  const p = panels[m.key]; if (!p) return;
+  const r = m.result;
+  if (r.error) { p.info.textContent = "erro: " + r.error; setStatus("erro na visualização: " + r.error, "err"); return; }
+  p.img.src = r.png;
+  const lines = [];
+  for (const z of r.stats || []) {
+    if (z.steep_deg == null) { lines.push(z.zone_mm.toFixed(1) + " mm: sem cobertura"); continue; }
+    lines.push(z.zone_mm.toFixed(1) + " mm: íngreme " + fmt(z.steep_deg, 0) + "° (" + fmt(z.steep_power, 2) + " D)  plano " + fmt(z.flat_deg, 0) + "° (" + fmt(z.flat_power, 2) + " D)  cil. " + fmt(z.steep_power - z.flat_power, 2) + " D");
+    lines.push("        " + (z.rows || []).filter((x) => x[0] != null).map((x) => fmt(x[0], 2) + "@" + fmt(x[1], 0) + "°").join("   "));
+  }
+  if (r.profile) {
+    const q = r.profile;
+    lines.push("", "Perfil: " + q.diameter_mm + " mm, centro " + q.center + " — SA " + fmt(q.sa_c40, 3) + " µm | coma " + fmt(q.coma, 3) + " | trefoil " + fmt(q.trefoil, 3) + " | RMS HOA " + fmt(q.rms_hoa, 3) + " µm | cil. " + fmt(q.cyl_D, 2) + " D × " + fmt(q.axis_deg, 0) + "°");
+  } else lines.push("", "Nenhum perfil de frente de onda disponível para este diâmetro/centro.");
+  p.info.textContent = lines.join("\n");
+  setStatus("visualização atualizada.");
+}
+function onCompleto(m) {
+  const p = panels[m.key]; if (!p) return;
+  const r = m.result;
+  if (r.error) { setStatus("não foi possível atualizar a página: " + r.error, "err"); return; }
+  const fc = p.art.querySelector("figure.completo img"); if (fc) fc.src = r.png;
+  setStatus("página de resultado completo atualizada com os filtros escolhidos.");
+}
+function printImage(src) {
+  const w = window.open("", "_blank");
+  if (!w) { setStatus("o navegador bloqueou a janela de impressão; permita pop-ups.", "err"); return; }
+  w.document.write("<!doctype html><html><head><meta charset='utf-8'><title>Topografia</title><style>@page{size:A4;margin:10mm} body{margin:0;text-align:center} img{max-width:100%;max-height:270mm}</style></head><body><img src='" + src + "' onload='window.print()'></body></html>");
+  w.document.close();
 }
 function dlButton(label, data, mime, filename) {
   const a = document.createElement("a"); a.textContent = label; a.href = URL.createObjectURL(new Blob([data], { type: mime })); a.download = filename;

@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QAction, QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
@@ -49,8 +51,9 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..adapters import AdapterError, detect_profile, import_tms_bundle, list_exams, patient_display_name
 from ..model import Analysis, NormalizedExam, OpticalProfile, QualityConfig, ReconstructionConfig, WavefrontResult
-from ..pipeline import default_profiles
+from ..pipeline import default_profiles, profiles_for_exam
 from ..plots import compare_scale, figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
+from ..topo import ViewOptions, figure_tms_view, zone_axis_stats
 from ..reporting import export_all, report_lines
 from .canvas import MplCanvas
 from .compute import profile_settings_diff, run_analysis
@@ -217,17 +220,23 @@ class MainWindow(QMainWindow):
         self.center_combo.addItems(["vértice", "pupila", "ambos"])
         self.center_combo.setCurrentIndex(2)
         form.addRow("Centro:", self.center_combo)
-        drow = QHBoxLayout()
-        drow.addWidget(QLabel("Diâmetros:"))
-        self.d4 = QCheckBox("4 mm"); self.d4.setChecked(True)
+        drow = QGridLayout(); drow.setHorizontalSpacing(4)
+        drow.addWidget(QLabel("Diâmetros:"), 0, 0)
+        self.d3 = QCheckBox("3"); self.d3.setChecked(True)
+        self.d4 = QCheckBox("4"); self.d4.setChecked(True)
+        self.d5 = QCheckBox("5"); self.d5.setChecked(True)
         self.d6 = QCheckBox("6 mm"); self.d6.setChecked(True)
+        self.d_pupil = QCheckBox("pupila medida"); self.d_pupil.setChecked(True)
+        self.d_pupil.setToolTip("Perfil centrado na pupila com o diâmetro pupilar medido pelo TMS (PUP)")
         self.d_other_check = QCheckBox("outro")
         self.d_other = QDoubleSpinBox(); self.d_other.setRange(2.0, 8.0); self.d_other.setSingleStep(0.5); self.d_other.setValue(5.0); self.d_other.setSuffix(" mm")
         self.d_other.setEnabled(False)
         self.d_other_check.toggled.connect(self.d_other.setEnabled)
-        for x in (self.d4, self.d6, self.d_other_check, self.d_other):
-            drow.addWidget(x)
-        drow.addStretch(1)
+        for i, x in enumerate((self.d3, self.d4, self.d5, self.d6)):
+            drow.addWidget(x, 0, 1 + i)
+        drow.addWidget(self.d_pupil, 1, 0, 1, 2)
+        drow.addWidget(self.d_other_check, 1, 2, 1, 2)
+        drow.addWidget(self.d_other, 1, 4, 1, 2)
         pl.addLayout(drow)
         self.order_spin = QSpinBox(); self.order_spin.setRange(4, 10); self.order_spin.setValue(6)
         form.addRow("Ordem de Zernike:", self.order_spin)
@@ -238,7 +247,8 @@ class MainWindow(QMainWindow):
         self.ref_combo = QComboBox(); self.ref_combo.addItems(["paraxial_media_principais", "refoco_rms"])
         form.addRow("Referência:", self.ref_combo)
         lay.addWidget(p)
-        for sig in (self.center_combo.currentIndexChanged, self.d4.toggled, self.d6.toggled, self.d_other_check.toggled,
+        for sig in (self.center_combo.currentIndexChanged, self.d3.toggled, self.d4.toggled, self.d5.toggled, self.d6.toggled,
+                    self.d_pupil.toggled, self.d_other_check.toggled,
                     self.d_other.valueChanged, self.order_spin.valueChanged, self.method_combo.currentIndexChanged,
                     self.surf_order_spin.valueChanged, self.ref_combo.currentIndexChanged):
             sig.connect(lambda *_: self.on_params_changed())
@@ -267,6 +277,7 @@ class MainWindow(QMainWindow):
     def _build_tabs(self) -> QWidget:
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_summary_tab(), "Resultado completo")
+        self.tabs.addTab(self._build_topo_tab(), "Topografia (TMS)")
         self.tabs.addTab(self._build_import_tab(), "Importação")
         self.tabs.addTab(self._build_geometry_tab(), "Geometria")
         self.tabs.addTab(self._build_wavefront_tab(), "Frente de onda")
@@ -397,6 +408,148 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.cmp_table)
         return w
 
+    # ------------------------------------------------------------ topografia (estilo TMS) com filtros
+    def _radio_row(self, title: str, options: list[tuple[str, object]], default_index: int = 0) -> tuple[QGroupBox, QButtonGroup]:
+        box = QGroupBox(title); lay = QHBoxLayout(box); lay.setContentsMargins(6, 2, 6, 2); lay.setSpacing(4)
+        grp = QButtonGroup(box); grp.setExclusive(True)
+        for i, (label, value) in enumerate(options):
+            rb = QRadioButton(label); rb.setProperty("value", value); rb.setChecked(i == default_index)
+            grp.addButton(rb, i); lay.addWidget(rb)
+        lay.addStretch(1)
+        grp.buttonClicked.connect(lambda *_: self._on_view_changed())
+        return box, grp
+
+    def _build_topo_tab(self) -> QWidget:
+        w = QWidget(); lay = QVBoxLayout(w)
+        row1 = QHBoxLayout(); row2 = QHBoxLayout()
+        b, self.vg_kind = self._radio_row("Mapa", [("Axial", "axial"), ("Tangencial", "tangencial"), ("Refrativa", "refrativa"),
+                                                   ("Elevação", "elevacao"), ("Frente de onda", "frente_onda"), ("Alta ordem", "alta_ordem")])
+        row1.addWidget(b, 3)
+        b, self.vg_scale = self._radio_row("Escala", [("Standard TMS (40,5–53 D)", "tms"), ("Ajustada ao exame", "auto")])
+        row1.addWidget(b, 2)
+        b, self.vg_zone = self._radio_row("Zona (diâmetro)", [("tudo", None), ("3 mm", 3.0), ("5 mm", 5.0), ("7 mm", 7.0)])
+        row2.addWidget(b, 2)
+        b, self.vg_pupil = self._radio_row("Diâmetro pupilar", [("medida (PUP)", None), ("3 mm", 3.0), ("4 mm", 4.0), ("5 mm", 5.0), ("6 mm", 6.0)])
+        row2.addWidget(b, 3)
+        b, self.vg_center = self._radio_row("Centro (frente de onda)", [("vértice", "vertice"), ("pupila", "pupila")])
+        row2.addWidget(b, 2)
+        lay.addLayout(row1); lay.addLayout(row2)
+        body = QHBoxLayout()
+        self.cv_topo = MplCanvas(width=6.0, height=7.0, dpi=90, toolbar=True)
+        body.addWidget(self.cv_topo, 3)
+        side = QVBoxLayout()
+        self.topo_text = QPlainTextEdit(); self.topo_text.setReadOnly(True)
+        f = QFont("Monospace"); f.setStyleHint(QFont.TypeWriter); f.setPointSize(9); self.topo_text.setFont(f)
+        self.topo_text.setPlaceholderText("Astig Stats por zona (3/5/7 mm), índices do TMS e perfil de frente de onda escolhido")
+        side.addWidget(self.topo_text, 1)
+        bp = QPushButton("Imprimir esta visualização…"); bp.clicked.connect(self.print_topo_view)
+        bs = QPushButton("Salvar esta visualização (PDF/PNG)…"); bs.clicked.connect(self.save_topo_view)
+        side.addWidget(bp); side.addWidget(bs)
+        hint = QLabel("Os filtros (escala, zona, diâmetro pupilar, centro) também valem para a aba \"Resultado completo\" e para a impressão.")
+        hint.setWordWrap(True); hint.setStyleSheet("color:#555; font-size:11px;")
+        side.addWidget(hint)
+        body.addLayout(side, 2)
+        lay.addLayout(body, 1)
+        return w
+
+    def _view_options(self, kind: Optional[str] = None) -> ViewOptions:
+        def val(grp: QButtonGroup):
+            b = grp.checkedButton()
+            return b.property("value") if b is not None else None
+        return ViewOptions(kind=kind or val(self.vg_kind) or "axial", scale=val(self.vg_scale) or "tms", zone_mm=val(self.vg_zone),
+                           pupil_mm=val(self.vg_pupil), center=val(self.vg_center) or "vertice")
+
+    def _on_view_changed(self) -> None:
+        st = self.selected_state()
+        if st is None:
+            return
+        self.fill_topo_tab(st)
+        self.fill_summary_tab(st)
+
+    def fill_topo_tab(self, st: PackageState) -> None:
+        if st.exam is None:
+            self.cv_topo.clear("importação inválida"); self.topo_text.clear()
+            return
+        vo = self._view_options()
+        try:
+            figure_tms_view(st.exam, st.analysis, vo, fig=self.cv_topo.figure, width_in=6.0)
+            self.cv_topo.canvas.draw_idle()
+        except Exception as e:  # noqa: BLE001
+            self.cv_topo.clear(f"Não foi possível desenhar: {type(e).__name__}: {e}")
+        lines = []
+        from ..topo import ZONES_MM, tms_header_lines
+        lines += tms_header_lines(st.exam) + [""]
+        role = {"axial": "DIO", "tangencial": "ROC", "refrativa": "POW"}.get(vo.kind, "DIO")
+        lines.append(f"Astig Stats / Power Axis ({ {'DIO': 'axial', 'ROC': 'tangencial', 'POW': 'refrativa'}[role] }):")
+        for z in ZONES_MM:
+            zs = zone_axis_stats(st.exam, z, role)
+            if zs.rows:
+                lines.append(f"  {z:.1f} mm: íngreme {zs.steep_deg:.0f}° ({zs.steep_power:.2f} D)  plano {zs.flat_deg:.0f}° ({zs.flat_power:.2f} D)  "
+                             f"cil. ceratométrico {zs.steep_power - zs.flat_power:.2f} D")
+                lines.append("        " + "   ".join(f"{pw:.2f}@{ang:.0f}°" for pw, ang in zs.rows if np.isfinite(pw)))
+            else:
+                lines.append(f"  {z:.1f} mm: sem cobertura")
+        if st.analysis is not None:
+            from ..topo import select_profile
+            wf = select_profile(st.analysis, vo)
+            if wf is not None:
+                m = wf.metrics
+                lines += ["", f"Perfil mostrado: {wf.profile.name} (diâmetro {wf.profile.diameter_mm:g} mm, centro {wf.profile.center_mode})",
+                          f"  SA c(4,0) {m['sa_c40']:+.3f} µm   |coma| {m['coma_magnitude']:.3f}   |trefoil| {m['trefoil_magnitude']:.3f}   RMS HOA {m['rms_hoa_n3plus']:.3f} µm",
+                          f"  cilindro refrativo equiv. {m.get('cilindro_equivalente_D', float('nan')):+.2f} D × {m.get('eixo_equivalente_deg', float('nan')):.0f}°"]
+            else:
+                lines += ["", "Nenhum perfil de frente de onda disponível para o diâmetro/centro escolhidos."]
+        else:
+            lines += ["", "Calcule o exame para ver a frente de onda neste diâmetro pupilar."]
+        self.topo_text.setPlainText("\n".join(lines))
+
+    @Slot()
+    def print_topo_view(self):
+        st = self.selected_state()
+        if st is None or st.exam is None:
+            return
+        fig = figure_tms_view(st.exam, st.analysis, self._view_options(), width_in=7.5)
+        self._print_figure(fig, f"topografia_{st.exam.identity.exam_id}_{st.exam.identity.eye or 'X'}", landscape=False)
+
+    @Slot()
+    def save_topo_view(self):
+        st = self.selected_state()
+        if st is None or st.exam is None:
+            return
+        vo = self._view_options()
+        stem = f"topografia_{vo.kind}_{st.exam.identity.study_id}_{st.exam.identity.exam_id}_{st.exam.identity.eye or 'X'}"
+        if self.interactive:
+            path, _ = QFileDialog.getSaveFileName(self, "Salvar visualização", stem + ".png", "PNG (*.png);;PDF (*.pdf)")
+            if not path:
+                return
+        else:
+            path = os.path.join(tempfile.mkdtemp(prefix="tmsab_"), stem + ".png")
+        figure_tms_view(st.exam, st.analysis, vo, width_in=7.5).savefig(path, dpi=200)
+        self.statusBar().showMessage(f"Visualização salva em {path}", 10000)
+        return path
+
+    def _print_figure(self, fig, doc_name: str, landscape: bool = False) -> None:
+        try:
+            from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPainter
+            from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+        except Exception as e:  # noqa: BLE001
+            self._msg("Imprimir", f"Impressão indisponível neste sistema: {e}", "warn"); return
+        printer = QPrinter(QPrinter.HighResolution)
+        printer.setPageSize(QPageSize(QPageSize.A4)); printer.setPageOrientation(QPageLayout.Landscape if landscape else QPageLayout.Portrait)
+        printer.setDocName(doc_name)
+        if self.interactive:
+            dlg = QPrintDialog(printer, self); dlg.setWindowTitle("Imprimir")
+            if dlg.exec() != QPrintDialog.Accepted:
+                return
+        import io
+        buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=220)
+        img = QImage.fromData(buf.getvalue())
+        painter = QPainter(printer)
+        rect = painter.viewport(); size = img.size(); size.scale(rect.size(), Qt.KeepAspectRatio)
+        painter.setViewport(rect.x(), rect.y(), size.width(), size.height()); painter.setWindow(img.rect())
+        painter.drawImage(0, 0, img); painter.end()
+        self.statusBar().showMessage("Enviado para a impressora.", 8000)
+
     def _build_summary_tab(self) -> QWidget:
         """Página única (A4) com topografia, frente de onda, Zernike e tabelas — pronta para imprimir."""
         w = QWidget(); lay = QVBoxLayout(w)
@@ -434,7 +587,7 @@ class MainWindow(QMainWindow):
             self.cv_summary.clear("Calcule o exame para ver o resultado completo (topografia + frente de onda + tabelas).")
             return
         try:
-            figure_resultado_completo(st.exam, st.analysis, fig=self.cv_summary.figure, patient_name=self._patient_name(st))
+            figure_resultado_completo(st.exam, st.analysis, fig=self.cv_summary.figure, patient_name=self._patient_name(st), view=self._view_options())
             self.cv_summary.canvas.draw_idle()
         except Exception as e:  # noqa: BLE001
             self.cv_summary.clear(f"Não foi possível montar a página: {type(e).__name__}: {e}")
@@ -457,7 +610,7 @@ class MainWindow(QMainWindow):
             if dlg.exec() != QPrintDialog.Accepted:
                 return
         import io
-        fig = figure_resultado_completo(st.exam, st.analysis, patient_name=self._patient_name(st))
+        fig = figure_resultado_completo(st.exam, st.analysis, patient_name=self._patient_name(st), view=self._view_options())
         buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=220)
         img = QImage.fromData(buf.getvalue())
         painter = QPainter(printer)
@@ -478,7 +631,7 @@ class MainWindow(QMainWindow):
                 return
         else:
             path = os.path.join(tempfile.mkdtemp(prefix="tmsab_"), stem + ".pdf")
-        fig = figure_resultado_completo(st.exam, st.analysis, patient_name=self._patient_name(st))
+        fig = figure_resultado_completo(st.exam, st.analysis, patient_name=self._patient_name(st), view=self._view_options())
         fig.savefig(path, dpi=200)
         self.statusBar().showMessage(f"Resultado completo salvo em {path}", 10000)
         return path
@@ -654,20 +807,31 @@ class MainWindow(QMainWindow):
         self.on_selection_changed()
 
     # ------------------------------------------------------------ parâmetros
-    def current_profiles(self) -> list[OpticalProfile]:
+    def current_profiles(self, exam=None) -> list[OpticalProfile]:
+        """Perfis pedidos; com `exam`, acrescenta o da pupila medida (se marcado e se há pupila)."""
         centers = {0: ("vertice",), 1: ("pupila",), 2: ("vertice", "pupila")}[self.center_combo.currentIndex()]
-        diam = []
-        if self.d4.isChecked():
-            diam.append(4.0)
-        if self.d6.isChecked():
-            diam.append(6.0)
+        diam = [d for cb, d in ((self.d3, 3.0), (self.d4, 4.0), (self.d5, 5.0), (self.d6, 6.0)) if cb.isChecked()]
         if self.d_other_check.isChecked():
             diam.append(float(self.d_other.value()))
         diam = sorted(set(diam))
-        profs = default_profiles(diam, centers, int(self.order_spin.value())) if diam else []
+        if not diam and not self.d_pupil.isChecked():
+            return []
+        if exam is not None:
+            return profiles_for_exam(exam, diam, centers, int(self.order_spin.value()), measured_pupil=self.d_pupil.isChecked(),
+                                     reference=self.ref_combo.currentText())
+        profs = default_profiles(diam, centers, int(self.order_spin.value()))
         for p in profs:
             p.reference = self.ref_combo.currentText()
         return profs
+
+    def _profile_request(self) -> dict:
+        """Pedido de perfis independente do exame (o worker completa com a pupila medida por exame)."""
+        centers = {0: ("vertice",), 1: ("pupila",), 2: ("vertice", "pupila")}[self.center_combo.currentIndex()]
+        diam = [d for cb, d in ((self.d3, 3.0), (self.d4, 4.0), (self.d5, 5.0), (self.d6, 6.0)) if cb.isChecked()]
+        if self.d_other_check.isChecked():
+            diam.append(float(self.d_other.value()))
+        return {"diameters": sorted(set(diam)), "centers": centers, "order": int(self.order_spin.value()),
+                "measured_pupil": self.d_pupil.isChecked(), "reference": self.ref_combo.currentText()}
 
     def current_recon(self) -> ReconstructionConfig:
         return ReconstructionConfig(method=self.method_combo.currentText(), surface_order=int(self.surf_order_spin.value()))
@@ -675,7 +839,7 @@ class MainWindow(QMainWindow):
     def set_default_params(self) -> None:
         self._params_block = True
         try:
-            self.center_combo.setCurrentIndex(2); self.d4.setChecked(True); self.d6.setChecked(True)
+            self.center_combo.setCurrentIndex(2); self.d3.setChecked(True); self.d4.setChecked(True); self.d5.setChecked(True); self.d6.setChecked(True); self.d_pupil.setChecked(True)
             self.d_other_check.setChecked(False); self.order_spin.setValue(6)
             self.method_combo.setCurrentIndex(0); self.surf_order_spin.setValue(10); self.ref_combo.setCurrentIndex(0)
         finally:
@@ -714,7 +878,8 @@ class MainWindow(QMainWindow):
         for job in jobs:
             self.packages[job[0]].status = "calculando"
         self._refresh_list_labels()
-        self.worker = AnalysisWorker(jobs, profiles, self.current_recon(), QualityConfig(), parent=self)
+        self.worker = AnalysisWorker(jobs, profiles, self.current_recon(), QualityConfig(), parent=self,
+                                     profile_request=self._profile_request())
         self.worker.progress.connect(self.on_progress)
         self.worker.package_done.connect(self.on_package_done)
         self.worker.package_failed.connect(self.on_package_failed)
@@ -724,7 +889,7 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def _set_params_enabled(self, on: bool) -> None:
-        for x in (self.center_combo, self.d4, self.d6, self.d_other_check, self.order_spin, self.method_combo,
+        for x in (self.center_combo, self.d3, self.d4, self.d5, self.d6, self.d_pupil, self.d_other_check, self.order_spin, self.method_combo,
                   self.surf_order_spin, self.ref_combo):
             x.setEnabled(on)
         self.d_other.setEnabled(on and self.d_other_check.isChecked())
@@ -806,13 +971,12 @@ class MainWindow(QMainWindow):
 
     def compute_sync(self, keys: Optional[list[str]] = None, profiles: Optional[list[OpticalProfile]] = None) -> None:
         """Cálculo síncrono (sem thread) — usado pelo teste de fumaça."""
-        profiles = profiles or self.current_profiles()
         for key in (keys or list(self.packages)):
             st = self.packages[key]
             if st.exam is None:
                 continue
             try:
-                analysis, rec = run_analysis(st.exam, profiles, self.current_recon(), QualityConfig())
+                analysis, rec = run_analysis(st.exam, profiles or self.current_profiles(st.exam), self.current_recon(), QualityConfig())
             except (ValueError, AdapterError) as e:
                 self.on_package_failed(key, f"análise inválida: {e}")
                 continue
@@ -842,6 +1006,7 @@ class MainWindow(QMainWindow):
 
     def refresh_all_tabs(self, st: PackageState) -> None:
         self.fill_summary_tab(st)
+        self.fill_topo_tab(st)
         self.fill_import_tab(st)
         self.fill_geometry_tab(st)
         self.fill_wavefront_tab(st)

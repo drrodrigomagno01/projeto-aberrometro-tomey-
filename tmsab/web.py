@@ -24,7 +24,7 @@ from matplotlib.figure import Figure
 from . import CORE_VERSION
 from .adapters import AdapterError, import_tms_bundle, list_exams, patient_display_name
 from .model import Analysis, NormalizedExam, QualityConfig, ReconstructionConfig
-from .pipeline import analyze_exam, default_profiles
+from .pipeline import DEFAULT_DIAMETERS, analyze_exam, profiles_for_exam
 from .plots import figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
 from .reporting import canonical_result, export_csv, export_json, export_pdf, report_lines, report_stem
 
@@ -270,26 +270,102 @@ details.texto pre { font-size: 10.5px; white-space: pre-wrap; background: #f7f7f
 # ---------------------------------------------------------------------------
 # análise de um exame → pacote de resultados
 # ---------------------------------------------------------------------------
-def _options(options: Optional[dict[str, Any]]) -> tuple[list, ReconstructionConfig, bool, bool]:
-    """include_name (padrão True): nome do paciente do XREF no cabeçalho/página impressa (nunca em JSON/CSV)."""
+def _options(options: Optional[dict[str, Any]], exam: Optional[NormalizedExam] = None) -> tuple[list, ReconstructionConfig, bool, bool]:
+    """include_name (padrão True): nome do paciente do XREF no cabeçalho/página impressa (nunca em JSON/CSV).
+    diameters (padrão 3/4/5/6 mm), centers, zernike_order, measured_pupil (padrão True: perfil com a pupila medida)."""
     o = dict(options or {})
-    diam = [float(d) for d in o.get("diameters", [4.0, 6.0])]
+    diam = [float(d) for d in o.get("diameters", list(DEFAULT_DIAMETERS))]
     centers = tuple(o.get("centers", ["vertice", "pupila"]))
     order = int(o.get("zernike_order", 6))
-    profiles = default_profiles(diam, centers, order)
+    if exam is not None:
+        profiles = profiles_for_exam(exam, diam, centers, order, measured_pupil=bool(o.get("measured_pupil", True)))
+    else:
+        from .pipeline import default_profiles
+        profiles = default_profiles(diam, centers, order)
     rec = ReconstructionConfig(method=str(o.get("method", "conica_zernike")), surface_order=int(o.get("surface_order", 10)))
     return profiles, rec, bool(o.get("maps", True)), bool(o.get("pdf", True))
+
+
+_CACHE: dict[tuple[str, str], tuple[NormalizedExam, Optional[Analysis]]] = {}     # (pasta, exame) → último cálculo
+
+
+def _finite(obj: Any) -> Any:
+    """NaN/inf → None recursivamente (JSON estrito para o navegador)."""
+    if isinstance(obj, dict):
+        return {k: _finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_finite(v) for v in obj]
+    if isinstance(obj, (float, np.floating)):
+        return None if not np.isfinite(obj) else float(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    return obj
+
+
+def _view_from(view: Optional[dict[str, Any]]):
+    from .topo import ViewOptions
+    v = dict(view or {})
+    return ViewOptions(kind=str(v.get("kind", "axial")), scale=str(v.get("scale", "tms")),
+                       zone_mm=(float(v["zone_mm"]) if v.get("zone_mm") else None),
+                       pupil_mm=(float(v["pupil_mm"]) if v.get("pupil_mm") else None),
+                       center=str(v.get("center", "vertice")))
+
+
+def topo_png(directory: str, exam_id: Optional[str], view: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Uma visualização no estilo do TMS (os "botões": mapa, escala, zona, diâmetro pupilar, centro) → PNG + Astig Stats."""
+    from .topo import ZONES_MM, figure_tms_view, select_profile, zone_axis_stats
+    key = (os.path.abspath(directory), str(exam_id or ""))
+    if key in _CACHE:
+        exam, an = _CACHE[key]
+    else:
+        try:
+            exam = import_tms_bundle(directory, None, exam_id=exam_id or None)
+        except AdapterError as e:
+            return {"error": f"importação inválida: {e}"}
+        an = None
+        _CACHE[key] = (exam, an)
+    vo = _view_from(view)
+    fig = figure_tms_view(exam, an, vo, width_in=6.2)
+    role = {"axial": "DIO", "tangencial": "ROC", "refrativa": "POW"}.get(vo.kind, "DIO")
+    stats = []
+    for z in ZONES_MM:
+        zs = zone_axis_stats(exam, z, role)
+        stats.append({"zone_mm": z, "steep_deg": zs.steep_deg, "flat_deg": zs.flat_deg, "steep_power": zs.steep_power,
+                      "flat_power": zs.flat_power, "rows": [[p, a] for p, a in zs.rows]})
+    prof = None
+    if an is not None:
+        wf = select_profile(an, vo)
+        if wf is not None:
+            m = wf.metrics
+            prof = {"name": wf.profile.name, "diameter_mm": wf.profile.diameter_mm, "center": wf.profile.center_mode,
+                    "sa_c40": m.get("sa_c40"), "coma": m.get("coma_magnitude"), "trefoil": m.get("trefoil_magnitude"),
+                    "rms_hoa": m.get("rms_hoa_n3plus"), "cyl_D": m.get("cilindro_equivalente_D"), "axis_deg": m.get("eixo_equivalente_deg")}
+    return _finite({"png": _png(fig, dpi=120), "stats": stats, "profile": prof, "view": dict(view or {})})
+
+
+def completo_png(directory: str, exam_id: Optional[str], view: Optional[dict[str, Any]] = None, include_name: bool = True) -> dict[str, Any]:
+    """Página "Resultado completo" com os filtros escolhidos (para a impressão no navegador)."""
+    key = (os.path.abspath(directory), str(exam_id or ""))
+    if key not in _CACHE or _CACHE[key][1] is None:
+        return {"error": "exame ainda não calculado"}
+    exam, an = _CACHE[key]
+    name = patient_display_name(directory, an.identity.exam_id) if include_name else None
+    fig = figure_resultado_completo(exam, an, patient_name=name, view=_view_from(view))
+    return {"png": _png(fig, dpi=150)}
 
 
 def analyze_exam_html(directory: str, exam_id: Optional[str], options: Optional[dict[str, Any]] = None,
                       progress=None) -> dict[str, Any]:
     """Importa + analisa um exame e devolve o relatório HTML, o JSON/CSV canônicos e o PDF (base64)."""
-    profiles, rec, with_maps, with_pdf = _options(options)
     try:
         exam = import_tms_bundle(directory, None, exam_id=exam_id or None)
     except AdapterError as e:
         return {"error": f"importação inválida: {e}", "exam_id": exam_id}
+    profiles, rec, with_maps, with_pdf = _options(options, exam)
     an, _ = analyze_exam(exam, profiles, rec, QualityConfig(), with_maps=with_maps, progress=progress)
+    _CACHE[(os.path.abspath(directory), str(an.identity.exam_id))] = (exam, an)
+    if len(_CACHE) > 24:
+        _CACHE.pop(next(iter(_CACHE)))
     name = patient_display_name(directory, an.identity.exam_id) if dict(options or {}).get("include_name", True) else None
     out: dict[str, Any] = {"exam_id": an.identity.exam_id, "eye": an.identity.eye, "study_id": an.identity.study_id,
                            "capture_index": an.identity.capture_index, "acquired_at": an.identity.acquired_at,

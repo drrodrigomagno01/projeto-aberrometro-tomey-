@@ -76,8 +76,11 @@ def test_resultado_completo_figure_and_html(export_dir, tmp_path):
     an, _ = analyze_exam(ex, with_maps=True)
     fig = figure_resultado_completo(ex, an)
     titles = [a.get_title() for a in fig.axes if a.get_title()]
-    assert any("axial" in t for t in titles) and any("tangencial" in t for t in titles) and any("refrativa" in t for t in titles)
+    texts = [t.get_text() for t in fig.texts]
+    assert any("TOPOGRAFIA" in t and "axial" in t for t in texts)          # mapa grande (estilo TMS, sem título no eixo)
+    assert any("tangencial" in t for t in titles) and any("refrativa" in t for t in titles)
     assert any("Elevação" in t for t in titles) and any("Alta ordem" in t for t in titles) and any("Zernike" in t for t in titles)
+    assert any("Frente de onda" in t for t in titles)
     assert abs(fig.get_size_inches()[0] - 8.27) < 0.01 and abs(fig.get_size_inches()[1] - 11.69) < 0.01
     # esfera de melhor ajuste de uma esfera exata recupera o raio
     t = np.linspace(0, 2 * np.pi, 200); r = np.linspace(0.3, 4.0, 15)[:, None]
