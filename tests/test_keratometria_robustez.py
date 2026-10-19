@@ -56,6 +56,11 @@ def test_simk_com_meridiano_plano_incompleto_nao_acusa_erro_de_leitura(tmp_path)
         assert "nan" not in fh.read().lower()                 # o gerador nunca grava "nan" no índice
     rec = {r["tipo"]: r for r in keratometry_records(k)}
     assert rec["simk_calculado"]["validade"] == "indisponivel" and rec["simk_calculado"]["motivo"]
+    # a conferência diz por que não foi feita, e o motivo chega ao CSV e ao relatório
+    assert any(c.startswith("SimK × XREF não conferido") and "anéis 6–8" in c for c in k.conferencia)
+    assert "não tem os anéis completos" in rec["simk_calculado"]["motivo"]
+    from tmsab.reporting import keratometry_report_lines
+    assert any(ln.startswith("SimK recalculado (regra do TMS, anéis 6–8): indisponível — ") for ln in keratometry_report_lines(k))
 
 
 def test_ponto_ausente_dentro_da_zona_conta_como_falta_de_dados(tmp_path):
@@ -131,3 +136,31 @@ def test_html_salvo_tambem_abre_os_aneis_na_impressao():
     with open(os.path.join(raiz, "web", "template.html"), encoding="utf-8") as fh:
         html = fh.read()
     assert html.count("details.zern, details.kerato-aneis") == 2     # impressão no app e no arquivo salvo
+
+
+def test_astigmatismo_alto_com_palpebra_logo_fora_da_zona_nao_bloqueia(tmp_path):
+    # 6 D com meridiano plano vertical: o anel 12 (raio médio 2,92 mm) passa de 3 mm no meridiano vertical, onde a
+    # pálpebra está AUSENTE; a regra nominal com folga de meio anel não o conta como "dentro" da zona 0–6 mm
+    _, ex = _exame(tmp_path, "astig6", cyl_D=6.0, axis_deg=90.0, pupil_diameter=6.0, lid_gap_from_ring=12,
+                   lid_gap_half_angle_deg=30.0, lid_gap_as_interpolated=False)
+    k = compute_keratometry(ex)
+    z6 = next(z for z in k.discos if z.diametro_mm == 6.0)
+    assert z6.validity == "disponivel", z6.block_reasons
+
+
+def test_pupila_menor_que_o_primeiro_anel_fica_sem_amostra(tmp_path):
+    _, ex = _exame(tmp_path, "puptiny", pupil_diameter=0.4)
+    k = compute_keratometry(ex)
+    assert k.pupila.validity == "indisponivel" and "nenhuma amostra" in k.pupila.block_reasons[0]
+
+
+def test_diametro_fora_dos_aneis_com_anel_ausente_sem_runtimewarning(tmp_path):
+    _, ex = _exame(tmp_path, "fora")
+    tab = ex.samples.fields["DIO"]
+    tab.states[19, :] = PointState.MISSING
+    tab.values[19, :] = np.nan
+    ex.samples.r[19, :] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        z = compute_keratometry(ex, KeratometryConfig(diametros_mm=(11.0,))).zonas[0]
+    assert z.validity == "indisponivel" and "fora da cobertura" in z.block_reasons[0]

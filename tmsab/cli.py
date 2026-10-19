@@ -124,6 +124,9 @@ def _print_analysis(an):
             astig = (f" | cil {m['cilindro_equivalente_D']:+.2f} D eixo {m['eixo_equivalente_deg']:.0f}° "
                      f"(meridiano mais curvo {(m['eixo_equivalente_deg'] - 90) % 180:.0f}°)")
         print(f"  {w.profile.name}: SA c40={m['sa_c40']:+.4f} µm | coma |{m['coma_magnitude']:.4f}| (c3-1 {m['coma_c3m1']:+.4f}, c31 {m['coma_c31']:+.4f}) | trefoil |{m['trefoil_magnitude']:.4f}| | HOA RMS={m['rms_hoa_n3plus']:.4f} µm | astig c22={m['astig_c22']:+.4f} c2-2={m['astig_c2m2']:+.4f}{astig}")
+    if an.pupil.state == "registrada":
+        from .pupila import fmt_chord_mu
+        print(f"  chord mu aparente (centro da pupila × vértice do TMS): {fmt_chord_mu(getattr(an, 'chord_mu', None))}")
     _print_keratometry(an)
 
 
@@ -207,12 +210,12 @@ def _kerato_long_rows(an):
     lineares de ângulo não fazem sentido (o eixo entra pelo J0/J45). Linhas só com códigos do exame (nunca nomes)."""
     from .reporting import kerato_chave
     k = getattr(an, "keratometry", None)
-    if k is None:
-        return []
     ident = {"participante": an.identity.study_id, "olho": an.identity.eye or "", "metodo": "TMS_calc",
              "captura": an.identity.capture_index if an.identity.capture_index is not None else "",
-             "exame": an.identity.exam_id, "perfil": k.config.versao, "analise": an.analysis_id}
-    zonas = list(k.zonas) + list(getattr(k, "discos", None) or []) + ([k.pupila] if k.pupila is not None else [])
+             "exame": an.identity.exam_id, "perfil": k.config.versao if k is not None else "pupila",
+             "analise": an.analysis_id}
+    zonas = [] if k is None else (list(k.zonas) + list(getattr(k, "discos", None) or [])
+                                  + ([k.pupila] if k.pupila is not None else []))
     rows = []
     for z in zonas:
         chave = kerato_chave(z)
@@ -225,6 +228,12 @@ def _kerato_long_rows(an):
                 rows.append({**ident, "metrica": f"{m}@{chave}", "valor": f"{round(float(v), 6) + 0.0:.6f}"})
     if an.pupil.state == "registrada" and an.pupil.diameter and an.pupil.diameter > 0:
         rows.append({**ident, "metrica": "diametro_pupila_mm", "valor": f"{an.pupil.diameter:.4f}"})
+    cm = getattr(an, "chord_mu", None)
+    if cm is not None:                     # componentes anatômicas (+ nasal, + superior): comparáveis entre OD e OS
+        rows.append({**ident, "metrica": "chord_mu_aparente_mm", "valor": f"{cm.distancia_mm:.4f}"})
+        if cm.nasal_mm is not None:
+            rows.append({**ident, "metrica": "chord_mu_nasal_mm", "valor": f"{round(cm.nasal_mm, 4) + 0.0:.4f}"})
+        rows.append({**ident, "metrica": "chord_mu_superior_mm", "valor": f"{round(cm.superior_mm, 4) + 0.0:.4f}"})
     return rows
 
 

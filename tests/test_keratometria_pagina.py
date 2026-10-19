@@ -154,7 +154,7 @@ def test_cabecalho_sem_simk1_com_e_sem_nome(casos):
         assert "SimK curvo" in cab and "/ plano" in cab and "(TMS)" in cab and "Es " in cab
         assert "impresso" not in cab and "tmsab" not in cab          # versão e data de impressão foram para o rodapé
         rod = [t for t in fig.texts if t.get_text().startswith("tmsab ")]
-        assert rod and rod[0].get_position()[1] < 0.1 and "impresso" in rod[0].get_text()
+        assert rod and rod[0].get_position()[1] < 0.1 and "calculado em" in rod[0].get_text()
         if nome:
             assert "Paciente: NOME DE TESTE" in cab and "Data do exame: " in cab
     # a página diz "meridiano mais curvo" no mesmo eixo do "SimK curvo" do cabeçalho
@@ -238,3 +238,30 @@ def test_hora_de_impressao_em_brasilia_ou_utc_menos_3_explicito(monkeypatch):
     assert _momento_local("2026-10-19T01:02:03+00:00") == "18/10/2026 22:02 (UTC−3)"
     assert _momento_local("2026-10-19T01:02:03") == "18/10/2026 22:02 (UTC−3)"
     assert _momento_local(None) == "não informado"
+
+
+def test_pagina_dentro_de_97_por_cento_com_escala_de_elevacao_grande(tmp_path):
+    # cilindro alto: elevação vs. esfera passa de ±100 µm e a barra de cor ganha rótulos de 4 caracteres
+    d = str(tmp_path / "elev")
+    write_export_folder_v1([SyntheticSpec(exam_id="E", R=7.8, Q=-0.2, cyl_D=8.0, axis_deg=20.0, eye="OD", decimals=4)], d)
+    ex = import_tms_bundle(d, exam_id="90001")
+    an, _ = analyze_exam(ex, with_maps=True)
+    fig = figure_resultado_completo(ex, an)
+    for dpi in (100, 150):
+        r = _desenhar(fig, dpi)
+        tb = fig.get_tightbbox(r)
+        assert tb.x0 >= 0.03 * A4[0] and tb.x1 <= 0.97 * A4[0], (dpi, tb)
+
+
+def test_motivos_resumidos_mostram_a_pupila_sem_valor(tmp_path):
+    # pálpebra AUSENTE desde o anel 12: periferia e pupila de 6 mm ficam sem valor, cada uma com cobertura diferente
+    d = str(tmp_path / "palp")
+    write_export_folder_v1([SyntheticSpec(exam_id="M", R=7.8, Q=-0.2, cyl_D=1.0, axis_deg=10.0, eye="OD", decimals=4,
+                                          pupil_diameter=6.0, lid_gap_from_ring=12, lid_gap_half_angle_deg=40.0,
+                                          lid_gap_as_interpolated=False)], d)
+    ex = import_tms_bundle(d, exam_id="90001")
+    an, _ = analyze_exam(ex, with_maps=False)
+    assert an.keratometry.pupila.validity == "indisponivel"
+    fig = figure_resultado_completo(ex, an)
+    mot = " ".join(t.get_text() for t in fig.texts if t.get_gid() == KERATO_GID and t.get_color() == "#8B0000")
+    assert mot.startswith("— sem valor: pupila") and "cobertura insuficiente" in mot and "…" not in mot

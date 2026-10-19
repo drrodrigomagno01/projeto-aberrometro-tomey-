@@ -282,7 +282,7 @@ function onListed(m) {
   for (const e of r.exams) {
     const key = m.dir + "#" + (e.exam_id || "");
     const tr = document.createElement("tr"); tr.id = "row-" + cssKey(key);
-    const simk = e.simk && e.simk.SimK1 != null ? (e.simk.SimK1.toFixed(2) + " D @ " + Math.round(e.simk["SimK1 Ang."]) + "° / " + e.simk.SimK2.toFixed(2) + " D; CYL " + e.simk.CYL.toFixed(2)) : "—";
+    const simk = e.simk && e.simk.SimK1 != null ? ("curvo " + e.simk.SimK1.toFixed(2) + " D @ " + Math.round(e.simk["SimK1 Ang."]) + "° / plano " + e.simk.SimK2.toFixed(2) + " D; CYL " + e.simk.CYL.toFixed(2)) : "—";
     tr.innerHTML = "<td>" + esc(e.patient_key || "—") + "</td><td>" + esc(e.exam_id || "(pacote)") + "</td><td>" + esc(e.eye || "?") + "</td><td>" + esc(e.capture_index != null ? e.capture_index : "—") + "</td><td>" + esc(fmtDate(e.acquired_at)) + "</td><td>" + esc(simk) + "</td><td class='st'>na fila</td>";
     $("examRows").appendChild(tr);
     pending.push({ key, dir: m.dir, base: m.base, exam: e.exam_id || "" });
@@ -322,6 +322,7 @@ function onResult(m) {
   const tb = document.createElement("div"); tb.className = "toolbar no-print";
   tb.appendChild(dlButton("Baixar JSON", r.json, "application/json", r.stem + ".json"));
   tb.appendChild(dlButton("Baixar CSV", r.csv, "text/csv", r.stem + ".csv"));
+  if (r.csv_ceratometria) tb.appendChild(dlButton("Baixar CSV da ceratometria", r.csv_ceratometria, "text/csv", r.stem + "_ceratometria.csv"));
   if (r.pdf_b64) tb.appendChild(dlButton("Baixar PDF (idêntico ao programa)", b64ToBytes(r.pdf_b64), "application/pdf", r.stem + ".pdf"));
   const bc = document.createElement("button"); bc.textContent = "Imprimir resultado completo (1 página)"; bc.onclick = () => printOnly(art, true); tb.appendChild(bc);
   const bp = document.createElement("button"); bp.textContent = "Imprimir relatório detalhado deste exame"; bp.onclick = () => printOnly(art, false); tb.appendChild(bp);

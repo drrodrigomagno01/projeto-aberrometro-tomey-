@@ -17,6 +17,7 @@ import numpy as np
 from . import CORE_VERSION
 from .geometry import ReconstructedSurface, reconstruct_surface, support_metrics
 from .keratometry import compute_keratometry
+from .pupila import chord_mu_aparente
 from .model import (
     Analysis,
     GeometrySummary,
@@ -187,5 +188,6 @@ def analyze_exam(exam: NormalizedExam, profiles: Optional[list[OpticalProfile]] 
         reconstruction=recon, geometry=summarize_geometry(rec, recon), pupil=exam.pupil, wavefronts=results,
         quality_config=qc, import_diagnostics=list(exam.diagnostics) + diag, warnings=list(exam.warnings),
         keratometry=kres,
+        chord_mu=chord_mu_aparente(exam.pupil, exam.identity.eye),
     )
     return analysis, rec

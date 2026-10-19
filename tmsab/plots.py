@@ -392,6 +392,19 @@ KERATO_GID = "ceratometria"            # gid dos artistas do bloco (rótulo, tab
 _KERATO_FUNDO = {"pupila": "#fff4d6", "zona": "#eef4fb"}
 
 
+def _motivo_curto(motivo: str) -> str:
+    """Motivo de uma linha sem valor resumido para a folha A4 (o texto completo vai para a aba, o HTML e o
+    relatório): os números de cobertura mudam de diâmetro para diâmetro e impediriam o agrupamento."""
+    s = motivo.lower()
+    if "lacuna central" in s:
+        return "dentro da lacuna central do Plácido"
+    if "fora da cobertura" in s or "além da cobertura" in s:
+        return "fora da cobertura dos anéis"
+    if "meridianos" in s or "setor" in s or "nenhuma amostra" in s:
+        return "cobertura insuficiente (pálpebra ou pontos ausentes)"
+    return motivo.split("; ")[0]
+
+
 def _kerato_arranjo(linhas: list[dict], cab: list[str], fs: float, w_pt: float):
     """Textos, larguras de coluna e alturas de linha (pt) da tabela na fonte `fs`; None se não couber na largura."""
     hfs = fs - 0.4
@@ -468,11 +481,12 @@ def plot_keratometry_table(fig: Figure, rect, kres, fontsize: float = 6.2) -> Ax
     extras = [(ln, "#333") for ln in _quebrar(LEGENDA_TABELA, w_pt, leg_fs)]
     for a in getattr(kres, "alertas", None) or []:          # informativo (ex.: astigmatismo dependente da zona)
         extras += [(ln, "#8a5300") for ln in _quebrar("Alerta (informativo): " + a, w_pt, leg_fs)]
-    # motivos das linhas sem valor (a pupila "não registrada" já se explica no rótulo), agrupados, até 2 linhas
+    # motivos das linhas sem valor (a pupila "não registrada" já se explica no rótulo), resumidos e agrupados, com a
+    # pupila primeiro; até 2 linhas (o texto completo está na aba, no HTML e no relatório detalhado)
     grupos: dict[str, list[str]] = {}
-    for lin in linhas:
+    for lin in sorted(linhas, key=lambda l: l.get("tipo") != "pupila"):
         if not lin.get("disponivel", True) and lin.get("motivo") and "não registrada" not in str(lin.get("rotulo", "")):
-            grupos.setdefault(str(lin["motivo"]), []).append(str(lin.get("rotulo", "")).split(" — ")[0])
+            grupos.setdefault(_motivo_curto(str(lin["motivo"])), []).append(str(lin.get("rotulo", "")).split(" — ")[0])
     if grupos:
         mot = _quebrar("— sem valor: " + "; ".join(f"{', '.join(r)}: {m}" for m, r in grupos.items()), w_pt, leg_fs)
         if len(mot) > 2:
@@ -607,8 +621,10 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
     cax = fig.add_axes([x + w1 + 0.005, y1, 0.010, h1])
     plot_elevation_bfs(ax, exam, cax=cax, fontsize=7.2, title=None)
     ax.set_title(ax.get_title().replace("Elevação vs. esfera de melhor ajuste", "Elevação vs. esfera"), fontsize=7.2)
+    cax.set_ylabel("")                         # com rótulos de 4 caracteres (≥ 100 µm) passava de 97% da largura
     ax.set_xlabel("x (mm)", fontsize=6); ax.set_yticklabels([])
-    fig.text(XL, y1 + h1 + 0.030, "TOPOGRAFIA (Data Tables do TMS; círculos 3 e 6 mm; pupila tracejada; pontos interpolados pelo TMS incluídos)",
+    fig.text(XL, y1 + h1 + 0.030, "TOPOGRAFIA (Data Tables do TMS; círculos 3 e 6 mm; pupila tracejada; pontos interpolados pelo TMS incluídos; "
+             "elevação: + = anterior)",
              fontsize=6.8, weight="bold", color="#333", va="top")
 
     # ---- linha 2: frente de onda do melhor perfil disponível (vértice 6 mm de preferência)
@@ -671,6 +687,10 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
     if p.state == "registrada" and p.center_x is not None and p.center_y is not None:
         cen = f"centro ({_sinal(p.center_x)}, {_sinal(p.center_y)}) mm rel. ao vértice"
         geo_lines += [(cen + (f"; diâmetro {float(p.diameter):.2f} mm" if p.diameter else ""), False)]
+        cm = getattr(analysis, "chord_mu", None)
+        if cm is not None:
+            from .pupila import fmt_chord_mu
+            geo_lines += [(f"chord mu aparente {fmt_chord_mu(cm, curto=True)}", False)]
     else:
         geo_lines += [("não detectada nesta captura — perfis pupilares indisponíveis", False)]
     geo_lines += [("", False), ("ASTIGMATISMO CORNEANO (refrativo equivalente, vértice)", True)]
@@ -696,7 +716,7 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
     # ---- rodapé (de baixo para cima): aviso de uso e proveniência com versão e data de impressão
     rod_fs = 5.4
     hashes = "  ".join(f"{k.split(':')[0]}:{v[:8]}" for k, v in list(analysis.bundle_hashes.items())[:6])
-    prov = (f"tmsab {CORE_VERSION} · impresso {_momento_local(analysis.created_at)} · análise {analysis.analysis_id} · "
+    prov = (f"tmsab {CORE_VERSION} · calculado em {_momento_local(analysis.created_at)} · análise {analysis.analysis_id} · "
             f"arquivos {hashes} · " + ", ".join(f"{k}={v}" for k, v in list(analysis.versions.items())[:3]))
     uso = ("Ferramenta de pesquisa — aberrometria corneana ANTERIOR calculada das Data Tables do Tomey TMS; não é aberrometria "
            "ocular total, não é alegação diagnóstica, seleção de LIO nem planejamento terapêutico.")

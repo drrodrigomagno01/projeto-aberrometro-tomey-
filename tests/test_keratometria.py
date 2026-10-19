@@ -304,7 +304,7 @@ def _zona_ast(rotulo, tipo, d, dk, eixo_k2, validity="disponivel"):
 @pytest.mark.parametrize("z3, zp, alerta", [
     ((1.75, 89.0), (1.15, 89.0), True),      # mesmo eixo, 0,60 D de diferença (como num olho real)
     ((1.00, 90.0), (1.00, 102.0), True),     # 0,42 D vetorial, mas 12° com ΔK ≥ 0,75 D
-    ((0.50, 90.0), (0.50, 120.0), False),    # 0,50 D vetorial (não excede) e ΔK baixo: eixo não conta
+    ((0.49, 90.0), (0.49, 120.0), False),    # 0,49 D vetorial (abaixo de 0,50) e ΔK baixo: eixo não conta
     ((2.10, 20.0), (1.92, 23.0), False),     # zonas concordantes
 ])
 def test_alerta_astigmatismo_dependente_da_zona(z3, zp, alerta):
@@ -343,6 +343,12 @@ def test_exames_reais_reproduzem_simk_e_acp_do_tms():
             if k.pupila is not None and k.pupila.validity == "disponivel":
                 assert abs(k.pupila.k_medio_D - t["ACP"]) <= 0.03
             assert all(z.validity == "disponivel" for z in k.discos), e["exam_id"]
+            # diâmetro de cada anel = 2ª coluna do AVE gravado pelo próprio TMS (média do RAD dos pontos medidos)
+            with open(os.path.join(p, f"AVE_1_{e['exam_id']}.dat"), encoding="latin-1") as fh:
+                ave = [ln.split(",") for ln in fh.read().splitlines() if ln.strip()]
+            for j, a in enumerate(k.aneis):
+                if a.diametro_mm and float(ave[j][1]) > 0:
+                    assert abs(a.diametro_mm - float(ave[j][1])) <= 1e-3, (e["exam_id"], j, a.diametro_mm, ave[j][1])
             # Fourier 3 mm do XREF = amplitude do 2º harmônico (metade do cilindro), eixo no meridiano curvo
             if "3mm Reg. Astig." in t:
                 z3 = k.discos[0]

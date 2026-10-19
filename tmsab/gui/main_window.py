@@ -54,6 +54,7 @@ from ..keratometry import COLUNAS_TABELA, LEGENDA_TABELA, eixo_tabo, linhas_resu
 from ..model import Analysis, KeratometryResult, NormalizedExam, OpticalProfile, QualityConfig, ReconstructionConfig, WavefrontResult
 from ..pipeline import default_profiles
 from ..plots import compare_scale, figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
+from ..pupila import chord_mu_aparente, fmt_chord_mu
 from ..reporting import export_all, report_lines
 from .canvas import MplCanvas
 from .compute import profile_settings_diff, run_analysis
@@ -140,6 +141,9 @@ def _fmt(v, nd: int = 4, sign: bool = True) -> str:
 
 # ---- aba "Ceratometria": as 7 colunas do núcleo (COLUNAS_TABELA) + cobertura interpolada e vetor de potência
 K_COLUNAS = tuple(COLUNAS_TABELA) + ("% interp.", "J0 (D)", "J45 (D)")
+K_LEGENDA_COLUNAS_EXTRAS = ("% interp. = fração dos meridianos (na zona pupilar e nas zonas 0–d, da área) com pontos "
+                            "interpolados pelo aparelho; J0/J45 = vetor de potência do ΔK (Thibos), positivo = a favor "
+                            "da regra (J0 = −ΔK/2·cos 2·eixo K2).")
 K_SEPARADOR_ANEIS = "anéis medidos (Ø medido)"
 K_COR_K1, K_COR_K2 = "#2a78d6", "#eb6834"          # K1 plano / K2 curvo — as mesmas cores nos dois gráficos
 K_TINTA, K_TINTA_FRACA, K_GRADE, K_EIXO = "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
@@ -343,6 +347,7 @@ class MainWindow(QMainWindow):
         self.k_state.setFont(f); self.k_state.setWordWrap(True)
         lay.addWidget(self.k_state)
         box = QGroupBox("Potência axial do TMS (D) — K1 = meridiano mais plano, K2 = mais curvo; eixos TABO")
+        box.setMinimumHeight(118)                         # legenda + valor + subtexto de 2 linhas sem cortar
         grid = QGridLayout(box)
         grid.setContentsMargins(6, 2, 6, 2)
         self.k_bn = {
@@ -379,7 +384,7 @@ class MainWindow(QMainWindow):
         self.btn_k_copy.clicked.connect(self.copy_keratometry_tsv)
         self.btn_k_copy.setEnabled(False)
         base.addWidget(self.btn_k_copy, 0, Qt.AlignTop)
-        self.k_legend = QLabel(LEGENDA_TABELA)
+        self.k_legend = QLabel(LEGENDA_TABELA + " " + K_LEGENDA_COLUNAS_EXTRAS)
         self.k_legend.setWordWrap(True)
         self.k_legend.setStyleSheet("color:#444; font-size:10px;")
         base.addWidget(self.k_legend, 1)
@@ -991,8 +996,10 @@ class MainWindow(QMainWindow):
         p = ex.pupil
         if p.state == "registrada":
             diam = f"{p.diameter:.2f} mm" if p.diameter is not None and np.isfinite(p.diameter) else "—"
+            cm = chord_mu_aparente(p, ex.identity.eye)
             self.pupil_label.setText(f"Pupila: registrada\ncentro ({p.center_x:+.3f}, {p.center_y:+.3f}) mm\n"
-                                     f"diâmetro {diam}\nreferencial {p.frame}\nmétodo {p.method}")
+                                     f"diâmetro {diam}\nchord mu aparente {fmt_chord_mu(cm, curto=True)}\n"
+                                     f"referencial {p.frame}\nmétodo {p.method}")
         else:
             self.pupil_label.setText(f"Pupila: {p.state} — perfis centrados na pupila ficam bloqueados (a pupila não é preenchida com o vértice)")
 
@@ -1080,7 +1087,10 @@ class MainWindow(QMainWindow):
         p = analysis.pupil
         if p.state == "registrada" and p.diameter is not None and np.isfinite(p.diameter):
             sub = "pupila de entrada, sob a iluminação do Plácido"
-            if p.center_x is not None and p.center_y is not None:
+            cm = getattr(analysis, "chord_mu", None)
+            if cm is not None:                    # subtexto curto: cabe em 2 linhas na janela padrão
+                sub = f"chord mu aparente {fmt_chord_mu(cm, curto=True)}"
+            elif p.center_x is not None and p.center_y is not None:
                 sub = f"centro ({p.center_x:+.2f}, {p.center_y:+.2f}) mm do vértice · " + sub
             self.k_bn["diametro"].set_value(f"{p.diameter:.2f} mm", sub)
         else:
@@ -1240,7 +1250,7 @@ class MainWindow(QMainWindow):
                         label=f"eixo pouco definido (ΔK < {qc.k_axis_min_cyl_D:.2f} D)")]
         if tem_simk:
             alcas.append(Line2D([], [], color=K_TINTA, ls="none", marker="D", ms=4.5, mec="white", label="SimK do TMS"))
-        fig.legend(handles=alcas, loc="outside lower center", ncol=3, fontsize=7, frameon=False, labelcolor=K_TINTA,
+        fig.legend(handles=alcas, loc="outside lower center", ncol=2, fontsize=7, frameon=False, labelcolor=K_TINTA,
                    handletextpad=0.4, columnspacing=1.0)
         self.cv_kerato.canvas.draw_idle()
 
@@ -1255,6 +1265,7 @@ class MainWindow(QMainWindow):
             cells = [t.item(r, c).text() if t.item(r, c) is not None else "" for c in range(t.columnCount())]
             out.append("\t".join(cells).rstrip("\t"))
         out.append(LEGENDA_TABELA)
+        out.append(K_LEGENDA_COLUNAS_EXTRAS)
         return "\n".join(out) + "\n"
 
     @Slot()

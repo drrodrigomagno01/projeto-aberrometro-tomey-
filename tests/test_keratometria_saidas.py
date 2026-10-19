@@ -18,7 +18,7 @@ from tmsab.keratometry import diferenca_eixo, linhas_resumo
 from tmsab.pipeline import analyze_exam
 from tmsab.reporting import (
     KERATO_CSV_COLUNAS,
-    KERATO_CSV_MARCADOR,
+    PUPILA_CSV_PERFIL,
     _H_LINHA,
     _H_TITULO,
     _Y_BASE,
@@ -28,6 +28,7 @@ from tmsab.reporting import (
     _wrap,
     canonical_result,
     export_csv,
+    export_csv_ceratometria,
     keratometry_records,
     report_lines,
 )
@@ -35,7 +36,6 @@ from tmsab.synthetic import SyntheticSpec, write_export_folder_v1
 from tmsab.web import analyze_exam_html, report_html
 
 TITULO = "## Ceratometria por zona (potência axial do TMS, n 1,3375)"
-MARCADOR = "# ceratometria por zona (D e graus, K1 = plano, K2 = curvo, potência axial do TMS, n 1,3375)"
 COLUNAS = ["analysis_id", "study_id", "exam_id", "eye", "tipo", "zona", "diametro_mm", "validade",
            "k1_plano_D", "eixo_k1_deg", "k2_curvo_D", "eixo_k2_deg", "delta_k_D", "k_medio_D", "j0_D", "j45_D",
            "assimetria_D", "irregularidade_D", "fracao_cobertura", "fracao_interpolados", "motivo"]
@@ -66,10 +66,17 @@ def _csv_texto(an, tmp_path) -> str:
         return fh.read()
 
 
+def _csv_kerato(an, tmp_path) -> str:
+    p = tmp_path / f"{an.identity.exam_id}_{an.analysis_id[:6]}_ceratometria.csv"
+    export_csv_ceratometria(an, str(p))
+    with open(p, encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
 def _secao(txt: str):
+    """CSV da ceratometria (arquivo próprio): cabeçalho na 1ª linha, uma linha por zona/anel."""
     rows = list(csv.reader(io.StringIO(txt), delimiter=";"))
-    i = next(i for i, r in enumerate(rows) if r and r[0] == KERATO_CSV_MARCADOR)
-    return rows, i, rows[i + 1], rows[i + 2:]
+    return rows, 0, rows[0], [r for r in rows[1:] if r]
 
 
 def _csv_antigo(an) -> str:
@@ -108,9 +115,8 @@ def _f(s: str):
 def test_csv_secao_da_ceratometria_bate_com_o_objeto(exames, tmp_path):
     ex, an = exames["exames"]["90001"]
     k = an.keratometry
-    rows, i, head, dados = _secao(_csv_texto(an, tmp_path))
-    assert KERATO_CSV_MARCADOR == MARCADOR and rows[i - 1] == [] and rows[i] == [MARCADOR]
-    assert head == COLUNAS and list(KERATO_CSV_COLUNAS) == COLUNAS
+    rows, i, head, dados = _secao(_csv_kerato(an, tmp_path))
+    assert head == COLUNAS and list(KERATO_CSV_COLUNAS) == COLUNAS and len(rows) == len(dados) + 1
     zonas = list(k.zonas) + list(k.discos) + [k.pupila]
     assert len(dados) == len(zonas) + 2 + len(k.aneis) and len(k.aneis) == 25
     assert all(len(r) == len(COLUNAS) for r in dados)
@@ -144,7 +150,7 @@ def test_csv_secao_da_ceratometria_bate_com_o_objeto(exames, tmp_path):
 
 def test_csv_pupila_ausente_fica_vazia_com_motivo(exames, tmp_path):
     _, an = exames["exames"]["90002"]
-    _, _, _, dados = _secao(_csv_texto(an, tmp_path))
+    _, _, _, dados = _secao(_csv_kerato(an, tmp_path))
     rp = dict(zip(COLUNAS, next(r for r in dados if r[4] == "pupila")))
     assert rp["validade"] == "indisponivel" and "não registrada" in rp["motivo"]
     assert all(rp[c] == "" for c in COLUNAS[8:20])                         # ausência, não zero
@@ -158,9 +164,15 @@ def test_csv_secoes_anteriores_inalteradas(exames, tmp_path):
         _, an = exames["exames"][eid]
         txt = _csv_texto(an, tmp_path)
         antigo = _csv_antigo(an)
-        assert txt.startswith(antigo) and txt[len(antigo):].startswith("\r\n" + MARCADOR + "\r\n")
+        assert txt.startswith(antigo)                                       # as seções da 0.3.1 não mudam
         rows = list(csv.reader(io.StringIO(txt), delimiter=";"))
         assert ";".join(rows[0]).startswith("analysis_id;study_id") and len(rows[0]) == 18
+        # retangular: nenhuma linha passa das 18 colunas do cabeçalho (pandas/R leem sem tratar seções)
+        assert max(len(r) for r in rows) == 18
+        novas = list(csv.reader(io.StringIO(txt[len(antigo):]), delimiter=";"))
+        assert novas and all(len(r) == 18 and r[4] == PUPILA_CSV_PERFIL for r in novas)
+        k = list(csv.reader(io.StringIO(_csv_kerato(an, tmp_path)), delimiter=";"))
+        assert {len(r) for r in k} == {len(COLUNAS)}
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +314,7 @@ def test_nenhum_nome_nas_saidas_tecnicas(exames, tmp_path):
     ex, an = exames["exames"]["90001"]
     out = tmp_path / "analises"
     paths = export_all(ex, an, str(out), patient_name=None)
-    for k in ("json", "csv"):
+    for k in ("json", "csv", "csv_ceratometria"):
         txt = open(paths[k], encoding="utf-8").read()
         assert not any(n in txt.upper() for n in NOMES), k
     assert not any(n in json.dumps(canonical_result(an), ensure_ascii=False) for n in NOMES)
@@ -310,13 +322,13 @@ def test_nenhum_nome_nas_saidas_tecnicas(exames, tmp_path):
     paginas = [(p.extract_text() or "") for p in PdfReader(paths["pdf"]).pages[1:]]
     assert any("Ceratometria por zona" in t for t in paginas) and any("anel 25" in t for t in paginas)
     res = audit_reports_for_names(exames["dir"], str(out))
-    assert res["n_hits"] == 0 and res["n_hits_pagina_completa"] == 0 and res["n_files"] == 3
+    assert res["n_hits"] == 0 and res["n_hits_pagina_completa"] == 0 and res["n_files"] == 4     # JSON, 2 CSV, PDF
 
 
 def test_analise_sem_ceratometria_nao_quebra_as_saidas(exames, tmp_path, capsys):
     ex, an = exames["exames"]["90001"]
     velho = dataclasses.replace(an, keratometry=None)                      # resultado anterior à 0.4.0
-    _, _, head, dados = _secao(_csv_texto(velho, tmp_path))
+    _, _, head, dados = _secao(_csv_kerato(velho, tmp_path))
     assert head == COLUNAS and len(dados) == 1 and dados[0][7] == "indisponivel" and "não calculada" in dados[0][-1]
     L = report_lines(velho)
     assert TITULO in L and any("não calculada" in ln for ln in L)

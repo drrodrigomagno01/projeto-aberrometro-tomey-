@@ -247,8 +247,9 @@ class KeratometryConfig:
     indice_ceratometrico: float = 1.3375
     metodo: str = "fourier_harmonicos_0a2"       # P(θ) = a0 + 1º e 2º harmônicos, mínimos quadrados
     centro: str = "vertice"                      # circunferências, zonas e anéis centrados no vértice topográfico
-    # circunferências ("anel" de diâmetro d, como um ceratômetro): 2,4 mm ≈ anel dos biômetros (IOLMaster 2,4–2,5;
-    # Argos 2,2; Lenstar 2,3) e 3,3 mm = anel com melhor previsão do astigmatismo em tórica (Chang 2022)
+    # circunferências ("anel" de diâmetro d, como um ceratômetro): 2,4 mm ≈ anel dos biômetros ópticos (IOLMaster
+    # 2,3–2,5; Lenstar 2,3; AL-Scan 2,4) e do SimK; 3,3 mm = anel externo do AL-Scan, que previu melhor o astigmatismo
+    # residual de LIO tórica que o de 2,4 mm (Chang 2022)
     diametros_mm: tuple[float, ...] = (1.0, 2.0, 2.4, 3.0, 3.3, 4.0, 5.0, 6.0, 7.0, 8.0)
     diametros_resumo_mm: tuple[float, ...] = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0)   # os que vão à folha A4
     # zonas (disco 0–d, média ponderada pela área, como Pentacam/Atlas): 0–3 mm centrada no vértice teve o menor
@@ -331,7 +332,7 @@ class KeratometryZone:
     anel: Optional[int] = None                   # anel do Plácido (1-based), quando tipo == "anel"
     centro_xy: Optional[tuple[float, float]] = None
     n_amostras: int = 0
-    fracao_cobertura: float = 0.0                # meridianos (ou área da pupila) com dados utilizáveis
+    fracao_cobertura: float = 0.0                # meridianos com dados (zonas e pupila: com dados até a borda)
     fracao_interpolados: float = 0.0             # parte da cobertura que usa pontos interpolados pelo aparelho
     maior_setor_sem_dados_deg: float = 0.0
     eixo_pouco_definido: bool = False
@@ -373,6 +374,17 @@ class GeometrySummary:
 
 
 @dataclass
+class ApparentChordMu:
+    """Chord mu aparente (tmsab/pupila.py): centro da pupila de entrada desta captura em relação ao vértice do TMS."""
+    distancia_mm: float
+    x_mm: float                                  # referencial do exame: vista do examinador, +x à direita da imagem
+    y_mm: float                                  # +y superior
+    nasal_mm: Optional[float]                    # + nasal, − temporal (None se o olho não for conhecido)
+    superior_mm: float                           # + superior, − inferior
+    diametro_pupila_mm: Optional[float]          # pupila desta captura (iluminação do Plácido)
+
+
+@dataclass
 class Analysis:
     analysis_id: str
     created_at: str
@@ -391,6 +403,7 @@ class Analysis:
     warnings: list[str]
     purpose: str = "Aberrometria corneana anterior calculada — estágio de pesquisa"
     keratometry: Optional[KeratometryResult] = None    # a partir da 0.4.0; ausente em JSON antigo = não calculado
+    chord_mu: Optional[ApparentChordMu] = None         # a partir da 0.4.0; None = pupila não detectada
 
 
 # ---------------------------------------------------------------------------

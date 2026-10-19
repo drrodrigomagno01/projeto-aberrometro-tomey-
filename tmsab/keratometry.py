@@ -50,6 +50,7 @@ SIMK_TMS_COLUNAS = (
 )
 
 _MIN_AMOSTRAS_AJUSTE = 9
+_ASSIMETRIA_MIN_D = 5e-3       # abaixo disto o eixo da assimetria (1º harmônico) não é informado
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +124,8 @@ def fourier_fit(theta_rad: np.ndarray, values: np.ndarray, weights: Optional[np.
     return {
         "a0": a0, "a1": a1, "b1": b1, "a2": a2, "b2": b2, "h1": h1, "h2": h2,
         "eixo_k2_deg": eixo_tabo(0.5 * math.degrees(math.atan2(b2, a2))),
-        "eixo_assimetria_deg": math.degrees(math.atan2(b1, a1)) % 360.0,
+        # com amplitude abaixo de 0,005 D o ângulo é ruído numérico (difere entre plataformas): sem eixo
+        "eixo_assimetria_deg": math.degrees(math.atan2(b1, a1)) % 360.0 if h1 >= _ASSIMETRIA_MIN_D else None,
         "irregularidade": irr, "n": int(m.sum()),
     }
 
@@ -205,7 +207,7 @@ def _disponibilidade_meridianos(z: KeratometryZone, ok: np.ndarray, interp: np.n
     z.fracao_interpolados = float(interp[ok].mean()) if ok.any() else 0.0
     z.maior_setor_sem_dados_deg = _maior_setor(~ok)
     if z.fracao_cobertura < qc.k_min_meridian_fraction:
-        z.block_reasons.append(f"meridianos com dados {z.fracao_cobertura:.0%} < {qc.k_min_meridian_fraction:.0%}")
+        z.block_reasons.append(f"meridianos com dados {z.fracao_cobertura:.1%} < {qc.k_min_meridian_fraction:.0%}")
     if z.maior_setor_sem_dados_deg > qc.k_max_missing_sector_deg:
         z.block_reasons.append(
             f"maior setor sem dados {z.maior_setor_sem_dados_deg:.0f}° > {qc.k_max_missing_sector_deg:.0f}°"
@@ -308,8 +310,9 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
     # ausente dentro dela
     folga = 0.5 * float(np.nanmedian(dr)) if np.isfinite(dr).any() else 0.0
     alcance = np.where(usable, r, -np.inf).max(axis=0)
-    # ponto sem dado dentro da zona, pela posição nominal do anel (no formato real o RAD do ponto ausente é NaN)
-    ausente_dentro = np.any((rn_full[:, None] <= borda[None, :]) & ~usable, axis=0)
+    # ponto sem dado dentro da zona, pela posição nominal do anel (no formato real o RAD do ponto ausente é NaN), com a
+    # mesma folga de meio anel do alcance: no astigmatismo o RAD de um anel varia ~0,1–0,25 mm com o meridiano
+    ausente_dentro = np.any((rn_full[:, None] <= borda[None, :] - folga) & ~usable, axis=0)
     valida = np.isfinite(borda)
     meridianos_ok = valida & (alcance >= borda - folga) & ~ausente_dentro
     z.fracao_cobertura = float(meridianos_ok.mean())          # meridiano sem borda conta como não coberto
@@ -320,7 +323,7 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
     z.fracao_interpolados = float(np.sum(peso[interp]) / soma) if soma > 0 else 0.0
     z.maior_setor_sem_dados_deg = _maior_setor(~meridianos_ok)
     if z.fracao_cobertura < qc.k_min_meridian_fraction:
-        z.block_reasons.append(f"meridianos da {nome} com dados até a borda {z.fracao_cobertura:.0%} < {qc.k_min_meridian_fraction:.0%}")
+        z.block_reasons.append(f"meridianos da {nome} com dados até a borda {z.fracao_cobertura:.1%} < {qc.k_min_meridian_fraction:.0%}")
     if z.maior_setor_sem_dados_deg > qc.k_max_missing_sector_deg:
         z.block_reasons.append(f"maior setor da {nome} sem dados {z.maior_setor_sem_dados_deg:.0f}° > {qc.k_max_missing_sector_deg:.0f}°")
     if z.fracao_interpolados > 0:
@@ -363,7 +366,7 @@ def _zona_pupilar(exam: NormalizedExam, dio, st, r, theta, qc: QualityConfig) ->
     if z.validity == "disponivel":
         z.notes.append(
             "zona = área dentro do contorno pupilar do TMS (pupila de entrada, iluminação do Plácido nesta captura), "
-            f"centro pupilar ({p.center_x:+.2f}, {p.center_y:+.2f}) mm do vértice; média ponderada pela área"
+            f"centro pupilar ({_assinado(p.center_x)}, {_assinado(p.center_y)}) mm do vértice; média ponderada pela área"
         )
     return z
 
@@ -602,7 +605,8 @@ def linhas_resumo(kres: Optional[KeratometryResult], incluir_aneis: bool = False
 
 COLUNAS_TABELA = ("Zona", "K1 plano (D)", "eixo K1", "K2 curvo (D)", "eixo K2", "ΔK (D)", "Km (D)")
 LEGENDA_TABELA = (
-    "Potência axial do TMS (DIO, n 1,3375), 2º harmônico de Fourier por meridiano; centro no vértice. "
+    "Potência axial do TMS (DIO, n 1,3375), 2º harmônico de Fourier por meridiano; circunferências, zonas 0–d e anéis "
+    "centrados no vértice, zona pupilar dentro do contorno da pupila. "
     "K1 = meridiano mais plano, K2 = mais curvo (no XREF do TMS, SimK1 é o curvo). Eixos TABO. "
     "† pontos interpolados pelo aparelho; * eixo pouco definido (ΔK baixo)."
 )

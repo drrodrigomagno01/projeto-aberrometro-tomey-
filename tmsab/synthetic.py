@@ -282,18 +282,21 @@ def write_export_folder_v1(specs: list[SyntheticSpec], out_dir: str, first_exam:
         # XREF: SimK/MinK/CYL pela regra do TMS-4N sobre o DIO axial, ACP (média por área na pupila) e Fourier 3/6 mm
         # (equivalente esférico, amplitude e eixo do 2º harmônico); os demais índices de Klyce/Fourier continuam
         # constantes (não são verdade de teste).
-        from .keratometry import simk_regra_tms
-        sk = simk_regra_tms(np.round(dio_ax, 4), st, s["theta_deg"]) or {}
-        k_curvo, k_plano = round(sk.get("k2_curvo_D", 44.70), 2), round(sk.get("k1_plano_D", 44.30), 2)
-        acp = _acp_sintetico(dio_ax, st, s["r"], np.abs(r_edge)) if spec.pupil_registered else 0.0
+        from .keratometry import eixo_tabo, simk_regra_tms
         f3 = _fourier_sintetico(np.round(dio_ax, 4), st, s["r"], s["theta_deg"], 3.2)
         f6 = _fourier_sintetico(np.round(dio_ax, 4), st, s["r"], s["theta_deg"], 6.2)
+        sk = simk_regra_tms(np.round(dio_ax, 4), st, s["theta_deg"])
+        if sk is None:                         # regra sem meridianos completos: SimK coerente com o Fourier 3 mm dos dados
+            sk = {"k2_curvo_D": f3[0] + f3[1], "eixo_k2_deg": f3[2], "k1_plano_D": f3[0] - f3[1],
+                  "eixo_k1_deg": eixo_tabo(f3[2] + 90.0), "mink_D": f3[0] - f3[1], "eixo_mink_deg": eixo_tabo(f3[2] + 90.0)}
+        k_curvo, k_plano = round(sk["k2_curvo_D"], 2), round(sk["k1_plano_D"], 2)
+        acp = _acp_sintetico(dio_ax, st, s["r"], np.abs(r_edge)) if spec.pupil_registered else 0.0
         hh = 9
         mm = 30 + i
         xref_rows.append(
             f"1,{patient_name[0]} ,{patient_name[1]} ,0,,{date_str} {hh:02d}:{mm:02d}:00,{spec.eye},C:\\\\Tomey\\\\Tms\\\\NewExams\\\\{exam}.tms,"
-            f"{k_curvo:.2f},{round(sk.get('eixo_k2_deg', 90.0)) % 180:.0f},{k_plano:.2f},{round(sk.get('eixo_k1_deg', 180.0)) % 180:.0f},"
-            f"{sk.get('mink_D', 44.20):.2f},{round(sk.get('eixo_mink_deg', 165.0)) % 180:.0f},{k_curvo - k_plano:.2f},{acp:.2f},"
+            f"{k_curvo:.2f},{round(sk['eixo_k2_deg']) % 180:.0f},{k_plano:.2f},{round(sk['eixo_k1_deg']) % 180:.0f},"
+            f"{sk['mink_D']:.2f},{round(sk['eixo_mink_deg']) % 180:.0f},{k_curvo - k_plano:.2f},{acp:.2f},"
             f"0.06,0.22,0.33,0.39,1.53,0.80,0.09,0.00,0.34,0.98,0.00,0.00,"
             f"{f3[0]:.2f},{f3[1]:.2f},{f3[2]:.2f},0.16,172.84,0.13,{f6[0]:.2f},{f6[1]:.2f},{f6[2]:.2f},0.24,166.56,0.15, 0.29, 0.31,{spec.Q:.2f}, 0.11, 0.89"
         )

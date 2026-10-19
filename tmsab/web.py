@@ -24,13 +24,15 @@ from matplotlib.figure import Figure
 from . import CORE_VERSION
 from .adapters import AdapterError, import_tms_bundle, list_exams, patient_display_name
 from .keratometry import COLUNAS_TABELA, LEGENDA_TABELA, eixo_tabo, linhas_resumo
-from .model import Analysis, NormalizedExam, QualityConfig, ReconstructionConfig
+from .model import Analysis, NormalizedExam, QualityConfig, ReconstructionConfig, to_jsonable
+from .pupila import fmt_chord_mu
 from .pipeline import analyze_exam, default_profiles
 from .plots import figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
 from .reporting import (
     KERATO_TITULO,
     canonical_result,
     export_csv,
+    export_csv_ceratometria,
     export_json,
     export_pdf,
     kerato_limits_text,
@@ -233,6 +235,7 @@ def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True, pati
         f"<li>Pupila: {_e(an.pupil.state)}"
         + (f" — centro ({an.pupil.center_x:+.2f}, {an.pupil.center_y:+.2f}) mm, diâmetro {an.pupil.diameter:.2f} mm ({_e(an.pupil.method)})"
            if an.pupil.state == "registrada" and an.pupil.diameter else (f" — {_e(an.pupil.method)}" if an.pupil.method else ""))
+        + (f"; chord mu aparente {_e(fmt_chord_mu(an.chord_mu))}" if getattr(an, "chord_mu", None) is not None else "")
         + "</li></ul></section>"
     )
     metrics = "<section><h3>Resultados por perfil</h3>" + _metrics_table(an) + "</section>"
@@ -394,11 +397,13 @@ def analyze_exam_html(directory: str, exam_id: Optional[str], options: Optional[
                       "metrics": {k: (None if (isinstance(v, float) and not np.isfinite(v)) else v) for k, v in w.metrics.items()}}
                      for w in an.wavefronts],
         "keratometry": _kerato_summary(an),
+        "chord_mu": to_jsonable(an.chord_mu) if getattr(an, "chord_mu", None) is not None else None,
     }
     out["html"] = report_html(exam, an, with_maps=with_maps, patient_name=name)
     tmp = tempfile.mkdtemp(prefix="tmsab_web_")
     out["json"] = open(export_json(an, os.path.join(tmp, "a.json")), encoding="utf-8").read()
     out["csv"] = open(export_csv(an, os.path.join(tmp, "a.csv")), encoding="utf-8").read()
+    out["csv_ceratometria"] = open(export_csv_ceratometria(an, os.path.join(tmp, "k.csv")), encoding="utf-8").read()
     if with_pdf:
         with open(export_pdf(exam, an, os.path.join(tmp, "a.pdf"), patient_name=name), "rb") as fh:
             out["pdf_b64"] = base64.b64encode(fh.read()).decode("ascii")

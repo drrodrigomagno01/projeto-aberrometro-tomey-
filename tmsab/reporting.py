@@ -1,8 +1,9 @@
 """Relatórios (plano §7): JSON canônico, CSV e PDF derivados do mesmo objeto de resultado.
 
 - JSON: null para ausências, nunca números não finitos; mapas não entram (ficam em arquivos NPZ opcionais).
-- CSV: coeficientes assinados com índices n, m, j, unidade, perfil e identificação da análise; métricas por perfil;
-  ceratometria por zona (seção própria, com cabeçalho próprio, depois das métricas).
+- CSV: coeficientes assinados com índices n, m, j, unidade, perfil e identificação da análise; métricas por perfil e
+  da pupila (chord mu aparente). Ceratometria por zona num segundo CSV (<stem>_ceratometria.csv); os dois são
+  retangulares.
 - PDF: identificação, finalidade, perfil, números, qualidade, proveniência; mapas; tabela de Zernike.
 Um perfil bloqueado gera relatório com o motivo; números indisponíveis aparecem como ausência.
 """
@@ -23,6 +24,7 @@ from . import CORE_VERSION
 from .keratometry import COLUNAS_TABELA, LEGENDA_TABELA, eixo_tabo, fmt_eixo, fmt_k, linhas_resumo
 from .model import Analysis, KeratometryResult, KeratometryZone, NormalizedExam, WavefrontResult, to_jsonable
 from .plots import figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
+from .pupila import fmt_chord_mu
 
 
 # ---------------------------------------------------------------------------
@@ -83,9 +85,32 @@ def export_csv(analysis: Analysis, path: str) -> str:
                 continue
             for k, v in wf.metrics.items():
                 w.writerow([analysis.analysis_id, "", "", "", wf.profile.name, "", "", "", "", "", "", "", "", "", "", "", k, _fmt(v)])
-        # ceratometria por zona: seção nova DEPOIS das anteriores (que são lidas por posição), com cabeçalho próprio
-        w.writerow([])
-        w.writerow([KERATO_CSV_MARCADOR])
+        # pupila desta captura e chord mu aparente: linhas de métrica (nome;valor), como as dos perfis — o CSV continua
+        # retangular (18 colunas) para leitores estritos (pandas, R)
+        p, cm = analysis.pupil, getattr(analysis, "chord_mu", None)
+        pup = [("pupila_estado", p.state)]
+        if p.state == "registrada" and p.diameter:
+            pup.append(("diametro_pupila_mm", _num(p.diameter, 4)))
+        if cm is not None:
+            pup += [("chord_mu_aparente_mm", _num(cm.distancia_mm, 4)), ("chord_mu_x_mm", _num(cm.x_mm, 4)),
+                    ("chord_mu_y_mm", _num(cm.y_mm, 4))]
+            if cm.nasal_mm is not None:
+                pup.append(("chord_mu_nasal_mm", _num(cm.nasal_mm, 4)))
+            pup.append(("chord_mu_superior_mm", _num(cm.superior_mm, 4)))
+        for nome, valor in pup:
+            w.writerow([analysis.analysis_id, "", "", "", PUPILA_CSV_PERFIL] + [""] * 11 + [nome, valor])
+    return path
+
+
+PUPILA_CSV_PERFIL = "pupila_desta_captura"     # "perfil" das linhas de métrica da pupila e do chord mu aparente
+
+
+def export_csv_ceratometria(analysis: Analysis, path: str) -> str:
+    """Ceratometria por zona num CSV próprio e retangular (21 colunas): circunferências, zonas 0–d, zona pupilar,
+    SimK recalculado, SimK do XREF e os 25 anéis (keratometry_records). Separado do CSV principal para que os dois
+    sejam lidos por leitores estritos (pandas, R) sem tratar seções."""
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh, delimiter=";")
         w.writerow(list(KERATO_CSV_COLUNAS))
         ident = [analysis.analysis_id, analysis.identity.study_id, analysis.identity.exam_id, analysis.identity.eye or ""]
         kres = getattr(analysis, "keratometry", None)
@@ -108,7 +133,6 @@ def _fmt(v) -> str:
 # ---------------------------------------------------------------------------
 # Ceratometria por zona — linhas do CSV (números crus; o texto formatado vem de keratometry.linhas_resumo)
 # ---------------------------------------------------------------------------
-KERATO_CSV_MARCADOR = "# ceratometria por zona (D e graus, K1 = plano, K2 = curvo, potência axial do TMS, n 1,3375)"
 KERATO_CSV_COLUNAS = (
     "analysis_id", "study_id", "exam_id", "eye", "tipo", "zona", "diametro_mm", "validade",
     "k1_plano_D", "eixo_k1_deg", "k2_curvo_D", "eixo_k2_deg", "delta_k_D", "k_medio_D", "j0_D", "j45_D",
@@ -300,6 +324,8 @@ def report_lines(analysis: Analysis) -> list[str]:
     L.append(f"Lacuna central {g.central_gap_mm:.2f} mm; raio externo medido {g.outer_radius_mm:.2f} mm; fração medida {g.measured_fraction:.0%}"
              + (f"; resíduo em pontos reservados {g.holdout_residual_rms_mm*1000:.3f} µm" if g.holdout_residual_rms_mm else ""))
     L.append(f"Pupila: {a.pupil.state}" + (f" — centro ({a.pupil.center_x:+.2f}, {a.pupil.center_y:+.2f}) mm, diâmetro {_mm2(a.pupil.diameter)} mm, referencial {a.pupil.frame}, método {a.pupil.method}" if a.pupil.state == "registrada" else ""))
+    if a.pupil.state == "registrada":
+        L.append(f"Chord mu aparente (centro da pupila × vértice do TMS, pupila desta captura): {fmt_chord_mu(getattr(a, 'chord_mu', None))}")
     L.append(f"Referencial: {a.frame.axes}; origem {a.frame.origin}; altura {a.frame.height_reference}; ângulo inicial {a.frame.angle_start_deg:g}°, sentido {'anti-horário' if a.frame.angle_direction == 1 else 'horário'}; espelho x: {a.frame.mirror_x}; transformação verificada: {'sim' if a.frame.transform_verified else 'NÃO'}")
     L.extend(keratometry_report_lines(getattr(a, "keratometry", None)))
     for wf in a.wavefronts:
@@ -442,7 +468,8 @@ def keratometry_report_lines(kres: Optional[KeratometryResult]) -> list[str]:
 def kerato_limits_text(qc) -> str:
     """Limites provisórios da ceratometria (QualityConfig), para a seção de qualidade."""
     eixo_min = getattr(qc, "k_eixo_min_cyl_D", 0.75)
-    txt = (f"Limites da ceratometria (provisórios): meridianos (ou área da zona) com dados ≥{qc.k_min_meridian_fraction:.0%}, "
+    txt = (f"Limites da ceratometria (provisórios): meridianos com dados (circunferências e anéis) ou com dados até a borda "
+           f"(zonas e pupila) ≥{qc.k_min_meridian_fraction:.0%}, "
            f"maior setor sem dados ≤{qc.k_max_missing_sector_deg:.0f}°; marca † com ≥{qc.k_interp_mark_fraction:.0%} dos meridianos "
            f"(ou da área) usando pontos interpolados pelo aparelho; * eixo pouco definido com ΔK < {qc.k_axis_min_cyl_D:.2f} D; "
            f"conferência SimK × XREF ±{qc.k_simk_tol_D:.2f} D e ±{qc.k_simk_axis_tol_deg:.0f}° (eixo só com CYL ≥ {eixo_min:.2f} D)")
@@ -514,6 +541,7 @@ def export_all(exam: NormalizedExam, analysis: Analysis, out_dir: str, stem: Opt
     paths = {
         "json": export_json(analysis, os.path.join(out_dir, stem + ".json")),
         "csv": export_csv(analysis, os.path.join(out_dir, stem + ".csv")),
+        "csv_ceratometria": export_csv_ceratometria(analysis, os.path.join(out_dir, stem + "_ceratometria.csv")),
         "pdf": export_pdf(exam, analysis, os.path.join(out_dir, stem + ".pdf"), patient_name=patient_name),
     }
     if any(w.map_grid is not None for w in analysis.wavefronts):
