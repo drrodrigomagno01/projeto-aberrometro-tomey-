@@ -612,9 +612,9 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
         draw_tms_legend(axl, levels_big, big.scale, "D", fontsize=4.4)
     else:
         axl.set_axis_off()
-    fig.text(XL, y1 + h1 + 0.017, "TOPOGRAFIA — potência axial, escala " + ("Standard do TMS (40,5–53,0 D, 0,5 D)" if big.scale == "tms" else "ajustada ao exame")
-             + (f", zona {big.zone_mm:g} mm" if big.zone_mm else "") + "; meridianos íngreme/plano com as potências a 3/5/7 mm; pupila tracejada",
-             fontsize=6.3, weight="bold", color="#333", va="top")
+    _texto_cabendo(fig, XL, y1 + h1 + 0.017, "TOPOGRAFIA — potência axial, escala " + ("Standard do TMS (40,5–53,0 D)" if big.scale == "tms" else "ajustada ao exame")
+                   + (f", zona {big.zone_mm:g} mm" if big.zone_mm else "") + "; meridianos íngreme/plano e potências a 3/5/7 mm; pupila tracejada",
+                   6.3, larg_pt, weight="bold", color="#333", va="top")
     sw = 0.165; sh = sw * fw / fh
     grid = [("tangencial", 0.50, y1 + h1 - sh - 0.018), ("refrativa", 0.745, y1 + h1 - sh - 0.018), ("elevacao", 0.50, y1 - 0.004), ("frente_onda", 0.745, y1 - 0.004)]
     for kind, x, y in grid:
@@ -658,19 +658,19 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
 
     # ---- linha 3: geometria/pupila/astigmatismo (à direita da linha 2) e ceratometria por zona (toda a largura)
     y3 = y2 + h2 + 0.004                       # topo do bloco de geometria (ao lado da alta ordem/Zernike)
-    xg = 0.635                                 # início do bloco de geometria
+    xg = 0.625                                 # início do bloco de geometria
     xk = XL                                    # início do bloco de ceratometria
     geo_lines = [
         ("GEOMETRIA RECONSTRUÍDA", True),
-        (f"R = {g.conic_R_mm:.3f} mm    Q = {g.conic_Q:+.3f}    K equiv. {g.k_mean_D_keratometric:.2f} D", False),
-        (f"resíduo RMS {g.residual_rms_mm*1000:.2f} µm (máx {g.residual_max_mm*1000:.2f}); {g.method}, ordem {g.surface_order}", False),
-        (f"{g.n_points_used} pontos; raio medido {g.outer_radius_mm:.2f} mm; lacuna central {g.central_gap_mm:.2f} mm", False),
+        (f"R = {g.conic_R_mm:.3f} mm   Q = {g.conic_Q:+.3f}   K eq. {g.k_mean_D_keratometric:.2f} D", False),
+        (f"resíduo RMS {g.residual_rms_mm*1000:.2f} µm (máx {g.residual_max_mm*1000:.2f}); ordem {g.surface_order}", False),
+        (f"{g.n_points_used} pts; raio medido {g.outer_radius_mm:.2f} mm; lacuna {g.central_gap_mm:.2f} mm", False),
         ("", False),
         ("PUPILA (PUP)", True),
     ]
     p = analysis.pupil
     if p.state == "registrada" and p.center_x is not None and p.center_y is not None:
-        cen = f"centro ({_sinal(p.center_x)}, {_sinal(p.center_y)}) mm rel. ao vértice"
+        cen = f"centro ({_sinal(p.center_x)}, {_sinal(p.center_y)}) mm"
         geo_lines += [(cen + (f"; diâmetro {float(p.diameter):.2f} mm" if p.diameter else ""), False)]
         cm = getattr(analysis, "chord_mu", None)
         if cm is not None:
@@ -678,14 +678,14 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
             geo_lines += [(f"chord mu aparente {fmt_chord_mu(cm, curto=True)}", False)]
     else:
         geo_lines += [("não detectada nesta captura — perfis pupilares indisponíveis", False)]
-    geo_lines += [("", False), ("ASTIGMATISMO CORNEANO (refrativo equivalente, vértice)", True)]
+    geo_lines += [("", False), ("ASTIGMATISMO (refrativo equiv., vértice)", True)]
     for w in analysis.wavefronts:
         if w.validity == "disponivel" and w.profile.center_mode == "vertice" and w.metrics.get("cilindro_equivalente_D") is not None:
             ax_ = w.metrics["eixo_equivalente_deg"]
-            geo_lines.append((f"zona {w.profile.diameter_mm:g} mm: {_sinal(w.metrics['cilindro_equivalente_D'])} D × {_eixo(ax_)}  "
+            geo_lines.append((f"{w.profile.diameter_mm:g} mm: {_sinal(w.metrics['cilindro_equivalente_D'])} D × {_eixo(ax_)} "
                               f"(meridiano mais curvo {_eixo(ax_ - 90.0)})", False))
     if ix:
-        geo_lines.append((f"SimK do TMS (ceratométrico): CYL {iv('CYL')} D, meridiano mais curvo {_eixo(ix.get('SimK1 Ang.'))}", False))
+        geo_lines.append((f"SimK TMS: CYL {iv('CYL')} D, meridiano mais curvo {_eixo(ix.get('SimK1 Ang.'))}", False))
     geo_pt = (XR - xg) * fw * 72.0
     y = y3
     for ln, bold in geo_lines:
@@ -693,8 +693,8 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
         for k, parte in enumerate(partes):
             fig.text(xg + (0.01 if k else 0.0), y, parte, fontsize=5.9, va="top", weight="bold" if bold else "normal",
                      color="#111" if bold else "#222")
-            y -= 0.0108
-    y_geo = y + 0.0108 - 5.9 * 1.2 * py        # base da última linha
+            y -= 0.0100
+    y_geo = y + 0.0100 - 5.9 * 1.2 * py        # base da última linha
     yk_top = min(y2, y_geo) - 0.012
     yk0 = yk_top - 0.140
     plot_keratometry_table(fig, [xk, yk0, XR - xk, yk_top - yk0], getattr(analysis, "keratometry", None))
