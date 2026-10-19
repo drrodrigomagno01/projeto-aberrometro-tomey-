@@ -164,3 +164,15 @@ def test_diametro_fora_dos_aneis_com_anel_ausente_sem_runtimewarning(tmp_path):
         warnings.simplefilter("error", RuntimeWarning)
         z = compute_keratometry(ex, KeratometryConfig(diametros_mm=(11.0,))).zonas[0]
     assert z.validity == "indisponivel" and "fora da cobertura" in z.block_reasons[0]
+
+
+@pytest.mark.parametrize("cyl, dia, anel", [(0.5, 3.0, 5), (2.5, 6.0, 12), (6.0, 3.0, 5), (6.0, 6.0, 12)])
+def test_anel_inteiro_ausente_logo_dentro_da_borda_bloqueia(tmp_path, cyl, dia, anel):
+    # sem dados num anel inteiro logo dentro da borda, a zona não pode sair "disponível" (o K mudaria até 0,26 D)
+    _, ex = _exame(tmp_path, f"anel{anel}_{cyl}", cyl_D=cyl, pupil_diameter=5.0)
+    tab = ex.samples.fields["DIO"]
+    tab.states[anel, :] = PointState.MISSING
+    tab.values[anel, :] = np.nan
+    ex.samples.r[anel, :] = np.nan
+    z = next(z for z in compute_keratometry(ex).discos if z.diametro_mm == dia)
+    assert z.validity == "indisponivel", (z.validity, z.k1_plano_D)

@@ -24,7 +24,7 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 | §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows/macOS + versão HTML (Pyodide) | Implementado |
 | §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) + **página "Resultado completo"** (topografia axial/tangencial/refrativa/elevação + frente de onda + Zernike + tabelas, 1 folha A4) | Implementado |
 | **Ceratometria por zona** (0.4.0): K1 plano, K2 curvo e eixos em Ø 1–8 mm (e 2,4/3,3 mm), zonas 0–3 e 0–6 mm, zona pupilar e os 25 anéis, da potência axial medida pelo TMS; SimK e ACP do TMS recalculados e conferidos a cada exame; alerta de astigmatismo dependente da zona | Implementado e **conferido com 10 exames reais** (SimK a ≤ 0,01 D em 9 de 10 exames e 0,03 D no 10º (27204); Km da zona pupilar × ACP: erro médio 0,006 D (máx. 0,017) nos 9 com pupila detectada) — `docs/convencoes.md`, D23 |
-| §8 Suíte de verificação (169 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, ceratometria, saídas) | Implementado — `pytest` |
+| §8 Suíte de verificação (173 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, ceratometria, saídas) | Implementado — `pytest` |
 | §9 Estatística do piloto (repetibilidade, Bland–Altman com observações repetidas) + protocolo | Implementado (`tmsab stats`) |
 | §0 Inventário da estação / G0–G1 | **Fechados em 18/10/2026** com 14 exames reais de 3 pacientes — `docs/G0_resultado.md` (pendentes: tela "Sobre", olho de calibração, comparador) |
 | §9 Piloto com participantes e comparador | **Depende de dados reais** — `docs/protocolo_piloto.md` |
@@ -113,7 +113,7 @@ sintéticos (perfil v0) — e `tmsab.synthetic.write_export_folder_v1` gera past
 
 ```bash
 tmsab verify          # oval de Descartes (W≡0), esfera vs Seidel, traçado 3D vs referência meridional, sintéticos
-pytest -q             # 169 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py + ceratometria)
+pytest -q             # 173 ensaios (matriz da §8 em docs/validacao.md + formato real em tests/test_adapter_v1.py + ceratometria)
 ```
 
 Resultados registrados: esfera R=7,8 mm → c(4,0)=+0,0204 µm a 3 mm (Seidel +0,0197); elipsoide Q=−1/n² →

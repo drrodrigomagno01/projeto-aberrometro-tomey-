@@ -310,9 +310,15 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
     # ausente dentro dela
     folga = 0.5 * float(np.nanmedian(dr)) if np.isfinite(dr).any() else 0.0
     alcance = np.where(usable, r, -np.inf).max(axis=0)
-    # ponto sem dado dentro da zona, pela posição nominal do anel (no formato real o RAD do ponto ausente é NaN), com a
-    # mesma folga de meio anel do alcance: no astigmatismo o RAD de um anel varia ~0,1–0,25 mm com o meridiano
-    ausente_dentro = np.any((rn_full[:, None] <= borda[None, :] - folga) & ~usable, axis=0)
+    # ponto sem dado dentro da zona: no formato real o RAD do ponto ausente é NaN, então a posição dele é estimada pelo
+    # anel anterior do MESMO meridiano + o espaçamento nominal (no astigmatismo o raio de um anel varia ~0,1–0,25 mm
+    # com o meridiano; a média do anel erraria para os dois lados — bloqueio à toa ou anel inteiro ausente não visto)
+    r_est = np.where(np.isfinite(r), r, np.nan)
+    for k in range(nr):
+        falta = ~np.isfinite(r_est[k])
+        if falta.any():
+            r_est[k, falta] = rn_full[0] if k == 0 else r_est[k - 1, falta] + (rn_full[k] - rn_full[k - 1])
+    ausente_dentro = np.any((r_est <= borda[None, :]) & ~usable, axis=0)
     valida = np.isfinite(borda)
     meridianos_ok = valida & (alcance >= borda - folga) & ~ausente_dentro
     z.fracao_cobertura = float(meridianos_ok.mean())          # meridiano sem borda conta como não coberto

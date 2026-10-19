@@ -70,7 +70,9 @@
 - **Zona 0–d** (padrão 0–3 e 0–6 mm): área de raio d/2 centrada no vértice, com a mesma regra da zona pupilar (peso
   r·Δr, Km = média ponderada); equivale às "zonas" de Pentacam/Atlas. Com a pupila centrada no vértice, zona 0–d =
   zona pupilar de diâmetro d (ensaio). O peso r é maior nos meridianos planos (anéis mais longe do vértice), então o Km
-  por área fica alguns centésimos abaixo da média dos anéis quando há astigmatismo.
+  por área fica alguns centésimos abaixo da média dos anéis quando há astigmatismo. Um meridiano conta como coberto
+  quando os anéis com dados chegam à borda (meio anel de folga) e não há ponto ausente dentro dela; como o RAD do ponto
+  ausente vem vazio, a posição dele é estimada pelo anel anterior do mesmo meridiano mais o espaçamento nominal.
 - **Zona pupilar**: amostras com r ≤ raio da borda do PUP no mesmo meridiano, peso r·Δr (Δr do raio nominal do anel);
   Km = média ponderada (definição do ACP do TMS); K1/K2 = Km ∓ h2 do ajuste ponderado. Pupila de entrada sob a
   iluminação do Plácido, na captura — não é pupilometria mesópica/escotópica.
