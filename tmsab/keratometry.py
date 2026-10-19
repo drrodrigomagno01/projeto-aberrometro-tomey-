@@ -18,8 +18,11 @@ Definições (docs/convencoes.md, "Ceratometria por zona"; decisão D23 em docs/
   r = d/2 entre os dois anéis vizinhos, com o RAD daquele ângulo (os anéis se deslocam com a curvatura,
   então "3 mm" não é um anel fixo).
 - Anel medido: os valores do próprio anel; diâmetro = 2·média do RAD medido (= 2ª coluna do AVE).
-- Zona pupilar: amostras dentro do contorno pupilar do PUP (no mesmo meridiano), ponderadas pela área
-  (r·Δr); a média corresponde ao ACP do TMS. Centro implícito no próprio contorno da pupila.
+- Zona pupilar e zonas 0–d: média por área — cada amostra pesa a área da sua célula radial (largura Δr nominal do
+  anel, centrada em r) que fica dentro do contorno pupilar do PUP (no mesmo meridiano) ou do círculo de raio d/2:
+  r·Δr quando inteira dentro, só a parte de dentro na amostra da borda (ceratometria_v2, 0.4.1; a média varia de
+  forma contínua com a borda). A média da zona pupilar corresponde ao ACP do TMS. Centro implícito no próprio
+  contorno da pupila.
 - SimK pela regra do TMS-4N (reproduzida nos exames reais com erro médio de 0,004 D): média dos anéis
   6–8 em cada meridiano completo (θ e θ + 180°); curvo = máximo, plano = meridiano a +90°, MinK = mínimo
   em qualquer ângulo. No XREF do TMS, SimK1 é o CURVO e SimK2 o plano — o contrário da biometria.
@@ -293,8 +296,15 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
                    nome: str = "zona") -> KeratometryZone:
     """Preenche `z` com a ceratometria da área dentro de `borda` (raio por meridiano a partir do vértice).
 
-    Regra do ACP do TMS (reproduzida nos exames reais): amostras com r ≤ borda no mesmo meridiano, peso de área
-    r·Δr com Δr do raio nominal do anel; Km = média ponderada; K1/K2 = Km ∓ h2 do ajuste de Fourier ponderado.
+    Média por área (regra do ACP do TMS, reproduzida nos exames reais): cada amostra representa a célula radial
+    [r − Δr/2, r + Δr/2] do seu meridiano (Δr = espaçamento nominal do anel) e pesa a área dessa célula que fica
+    dentro da borda — r·Δr quando inteira dentro, só a parte de dentro na amostra da borda. Km = média ponderada;
+    K1/K2 = Km ∓ h2 do ajuste de Fourier ponderado. Com o recorte na borda a zona varia de forma contínua com o
+    diâmetro (incluir ou excluir a amostra inteira dava degraus de até 0,15 D, de Ø 2 mm em diante, quando um anel
+    entrava na zona pelos meridianos curvos; ceratometria_v2). Meridiano sem borda (contorno pupilar ausente nele) fica
+    fora da média. Como Δr é o espaçamento médio do anel (no astigmatismo os anéis ficam mais juntos nos meridianos
+    curvos), Km/K1/K2 da zona têm viés de ≈ +ΔK²/(8·Km) em relação à média por área exata (0,015 D com 2,4 D de
+    cilindro, 0,1 D com 6 D); ΔK e eixos não são afetados.
     """
     nr, na = r.shape
     usable = ((st == PointState.MEASURED) | (st == PointState.INTERPOLATED)) & np.isfinite(r) & np.isfinite(dio)
@@ -303,9 +313,14 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
     good = np.isfinite(rn)
     rn_full = np.interp(idx, idx[good], rn[good]) if good.sum() >= 2 else np.where(good, rn, 0.0)
     dr = np.abs(np.gradient(rn_full)) if nr > 1 else np.ones(nr)
-    dentro = np.isfinite(r) & (r <= borda[None, :])
-    sel = dentro & usable
-    peso = np.where(np.isfinite(r), r, 0.0) * dr[:, None]
+    valida = np.isfinite(borda)
+    # área (por radiano) da célula radial dentro da borda: ½·(b² − a²), a = r − Δr/2, b = mín(r + Δr/2, borda);
+    # meridiano sem borda: peso zero (−inf) e fora da seleção (valida) — as duas coisas, de propósito
+    rr0 = np.where(np.isfinite(r), r, 0.0)
+    ini = np.maximum(rr0 - 0.5 * dr[:, None], 0.0)
+    fim = np.minimum(rr0 + 0.5 * dr[:, None], np.where(valida, borda, -np.inf)[None, :])
+    peso = np.where(np.isfinite(r) & (fim > ini), 0.5 * (fim**2 - ini**2), 0.0)
+    sel = (peso > 0) & usable & valida[None, :]
     # cobertura: meridianos em que os anéis utilizáveis alcançam a borda (meio anel de folga) e não há ponto
     # ausente dentro dela
     folga = 0.5 * float(np.nanmedian(dr)) if np.isfinite(dr).any() else 0.0
@@ -319,15 +334,18 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
         if falta.any():
             r_est[k, falta] = rn_full[0] if k == 0 else r_est[k - 1, falta] + (rn_full[k] - rn_full[k - 1])
     ausente_dentro = np.any((r_est <= borda[None, :]) & ~usable, axis=0)
-    valida = np.isfinite(borda)
-    meridianos_ok = valida & (alcance >= borda - folga) & ~ausente_dentro
+    # e ao menos uma amostra com parte da célula dentro da borda (borda irregular, como a da pupila, perto do 1º anel)
+    meridianos_ok = valida & sel.any(axis=0) & (alcance >= borda - folga) & ~ausente_dentro
     z.fracao_cobertura = float(meridianos_ok.mean())          # meridiano sem borda conta como não coberto
     if (~valida).any():
         z.notes.append(f"{int((~valida).sum())} meridianos sem borda no contorno (fora da área)")
     soma = float(np.sum(peso[sel]))
-    interp = sel & (st == PointState.INTERPOLATED)
-    z.fracao_interpolados = float(np.sum(peso[interp]) / soma) if soma > 0 else 0.0
     z.maior_setor_sem_dados_deg = _maior_setor(~meridianos_ok)
+    if soma <= 0:                                             # o motivo é este (a cobertura zero só o repetiria)
+        z.block_reasons.append(f"nenhuma amostra dentro da {nome}")
+        return z
+    interp = sel & (st == PointState.INTERPOLATED)
+    z.fracao_interpolados = float(np.sum(peso[interp]) / soma)
     if z.fracao_cobertura < qc.k_min_meridian_fraction:
         z.block_reasons.append(f"meridianos da {nome} com dados até a borda {z.fracao_cobertura:.1%} < {qc.k_min_meridian_fraction:.0%}")
     if z.maior_setor_sem_dados_deg > qc.k_max_missing_sector_deg:
@@ -335,8 +353,6 @@ def _zona_por_area(z: KeratometryZone, borda: np.ndarray, dio, st, r, theta, qc:
     if z.fracao_interpolados > 0:
         z.notes.append(f"{z.fracao_interpolados:.0%} da área usa pontos interpolados pelo aparelho (pálpebra)")
         z.marca_interpolados = z.fracao_interpolados >= qc.k_interp_mark_fraction
-    if not z.block_reasons and soma <= 0:
-        z.block_reasons.append(f"nenhuma amostra dentro da {nome}")
     if z.block_reasons:
         return z
     th = np.broadcast_to(theta[None, :], r.shape)
@@ -481,12 +497,8 @@ def alerta_dependencia_zona(res: KeratometryResult, qc: QualityConfig) -> Option
 # ---------------------------------------------------------------------------
 # Entrada principal
 # ---------------------------------------------------------------------------
-def compute_keratometry(exam: NormalizedExam, cfg: Optional[KeratometryConfig] = None,
-                        qc: Optional[QualityConfig] = None) -> KeratometryResult:
-    """Calcula a ceratometria por zona de um exame normalizado (nunca lança por falta de dados)."""
-    cfg = cfg or KeratometryConfig()
-    qc = qc or QualityConfig()
-    res = KeratometryResult(config=cfg)
+def _entradas(exam: NormalizedExam, cfg: KeratometryConfig):
+    """(dio, st, r, theta_deg, None) da fonte da ceratometria, ou (None, None, None, None, motivo) se ela faltar."""
     s = exam.samples
     tab = s.fields.get(cfg.fonte) if s.fields else None
     motivo = None
@@ -496,6 +508,19 @@ def compute_keratometry(exam: NormalizedExam, cfg: Optional[KeratometryConfig] =
         motivo = f"tabela {cfg.fonte} em '{tab.unit}' (esperado D, potência axial)"
     elif s.r is None:
         motivo = "posições radiais (RAD) indisponíveis"
+    if motivo:
+        return None, None, None, None, motivo
+    return (np.asarray(tab.values, dtype=float), np.asarray(tab.states), np.asarray(s.r, dtype=float),
+            np.asarray(s.theta_deg, dtype=float), None)
+
+
+def compute_keratometry(exam: NormalizedExam, cfg: Optional[KeratometryConfig] = None,
+                        qc: Optional[QualityConfig] = None) -> KeratometryResult:
+    """Calcula a ceratometria por zona de um exame normalizado (nunca lança por falta de dados)."""
+    cfg = cfg or KeratometryConfig()
+    qc = qc or QualityConfig()
+    res = KeratometryResult(config=cfg)
+    dio, st, r, theta_deg, motivo = _entradas(exam, cfg)
     if motivo:
         res.notes.append(f"ceratometria indisponível: {motivo}")
         res.zonas = [KeratometryZone(rotulo=f"Ø {d:g} mm", tipo="circunferencia", diametro_mm=float(d),
@@ -510,10 +535,6 @@ def compute_keratometry(exam: NormalizedExam, cfg: Optional[KeratometryConfig] =
             res.conferencia = [f"SimK × XREF não conferido: SimK recalculado indisponível ({motivo})"]
         return res
 
-    dio = np.asarray(tab.values, dtype=float)
-    st = np.asarray(tab.states)
-    r = np.asarray(s.r, dtype=float)
-    theta_deg = np.asarray(s.theta_deg, dtype=float)
     theta = np.radians(theta_deg)
 
     res.zonas = [_circunferencia(float(d), dio, st, r, theta, qc) for d in cfg.diametros_mm]
@@ -552,6 +573,23 @@ def compute_keratometry(exam: NormalizedExam, cfg: Optional[KeratometryConfig] =
 # ---------------------------------------------------------------------------
 # Linhas prontas para exibição (página A4, programa, HTML, relatório em texto)
 # ---------------------------------------------------------------------------
+def linha_da_zona(z: KeratometryZone, destaque: str = "") -> dict[str, Any]:
+    """Uma linha da tabela (números e texto formatado) — a mesma formatação na tabela e no controle de diâmetro."""
+    disp = z.validity == "disponivel"
+    marca = ("†" if z.marca_interpolados else "") + ("*" if z.eixo_pouco_definido else "")
+    rot = z.rotulo
+    if z.tipo == "anel" and z.diametro_mm:
+        rot = f"anel {z.anel} · Ø {z.diametro_mm:.2f} mm"
+    return {
+        "rotulo": rot + (f" {marca}" if marca and disp else ""), "tipo": z.tipo, "destaque": destaque,
+        "disponivel": disp, "validity": z.validity, "motivo": "; ".join(z.block_reasons),
+        "k1": z.k1_plano_D, "eixo_k1": z.eixo_k1_deg, "k2": z.k2_curvo_D, "eixo_k2": z.eixo_k2_deg,
+        "dk": z.delta_k_D, "km": z.k_medio_D, "diametro_mm": z.diametro_mm,
+        "texto": [fmt_k(z.k1_plano_D), fmt_eixo(z.eixo_k1_deg), fmt_k(z.k2_curvo_D), fmt_eixo(z.eixo_k2_deg),
+                  fmt_k(z.delta_k_D), fmt_k(z.k_medio_D)] if disp else ["—"] * 6,
+    }
+
+
 def linhas_resumo(kres: Optional[KeratometryResult], incluir_aneis: bool = False) -> list[dict[str, Any]]:
     """Linhas da tabela de ceratometria na ordem de exibição.
 
@@ -567,22 +605,8 @@ def linhas_resumo(kres: Optional[KeratometryResult], incluir_aneis: bool = False
     def _no_resumo(z: KeratometryZone, diametros) -> bool:
         return z.diametro_mm is not None and any(abs(z.diametro_mm - float(d)) < 1e-6 for d in diametros)
 
-    def _linha(z: KeratometryZone, destaque: str = "") -> dict[str, Any]:
-        disp = z.validity == "disponivel"
-        marca = ("†" if z.marca_interpolados else "") + ("*" if z.eixo_pouco_definido else "")
-        rot = z.rotulo
-        if z.tipo == "anel" and z.diametro_mm:
-            rot = f"anel {z.anel} · Ø {z.diametro_mm:.2f} mm"
-        return {
-            "rotulo": rot + (f" {marca}" if marca and disp else ""), "tipo": z.tipo, "destaque": destaque,
-            "disponivel": disp, "validity": z.validity, "motivo": "; ".join(z.block_reasons),
-            "k1": z.k1_plano_D, "eixo_k1": z.eixo_k1_deg, "k2": z.k2_curvo_D, "eixo_k2": z.eixo_k2_deg,
-            "dk": z.delta_k_D, "km": z.k_medio_D, "diametro_mm": z.diametro_mm,
-            "texto": [fmt_k(z.k1_plano_D), fmt_eixo(z.eixo_k1_deg), fmt_k(z.k2_curvo_D), fmt_eixo(z.eixo_k2_deg),
-                      fmt_k(z.delta_k_D), fmt_k(z.k_medio_D)] if disp else ["—"] * 6,
-        }
-
-    circ = kres.zonas if incluir_aneis else [z for z in kres.zonas if _no_resumo(z, cfg.diametros_resumo_mm)]
+    _linha = linha_da_zona
+    circ =kres.zonas if incluir_aneis else [z for z in kres.zonas if _no_resumo(z, cfg.diametros_resumo_mm)]
     discos = kres.discos if incluir_aneis else [z for z in kres.discos if _no_resumo(z, cfg.zonas_disco_resumo_mm)]
     for z in circ:
         out.append(_linha(z))
@@ -616,3 +640,109 @@ LEGENDA_TABELA = (
     "K1 = meridiano mais plano, K2 = mais curvo (no XREF do TMS, SimK1 é o curvo). Eixos TABO. "
     "† pontos interpolados pelo aparelho; * eixo pouco definido (ΔK baixo)."
 )
+
+
+# ---------------------------------------------------------------------------
+# Controle de diâmetro (aba Ceratometria do programa e versão HTML): K num diâmetro escolhido pelo usuário
+# ---------------------------------------------------------------------------
+CONTROLE_MIN_MM = 0.5            # abaixo disto só há a lacuna central do Plácido (1º anel em Ø ≈ 0,45 mm nos exames reais)
+CONTROLE_MAX_SEM_RAD_MM = 10.0   # faixa quando o exame não tem RAD (as linhas saem indisponíveis com o motivo)
+CONTROLE_PASSO_MM = 0.1          # resolução do controle: décimos exatos (k/10), os mesmos floats das linhas da tabela
+CONTROLE_INICIAL_MM = 3.0        # diâmetro mostrado ao abrir (zona de 3 mm no vértice, referência da LIO tórica)
+CONTROLE_LEGENDA = (
+    "Diâmetro escolhido no controle: circunferência Ø d (potência axial em r = d/2 em cada meridiano) e zona 0–d "
+    "(média pela área), centradas no vértice, com as mesmas regras e limites da tabela. O controle só mostra os "
+    "números: não altera a análise nem o JSON, o CSV e o PDF."
+)
+
+
+def _decimos(d: float) -> int:
+    return int(round(float(d) * 10.0))
+
+
+def faixa_do_controle(exam: NormalizedExam) -> tuple[float, float]:
+    """(mínimo, máximo) do controle de diâmetro em mm, em décimos exatos: de 0,5 mm até o Ø nominal do anel mais
+    externo, arredondado para cima. Dentro da faixa, o diâmetro sem cobertura sai indisponível com o motivo (nunca é
+    extrapolado)."""
+    r = exam.samples.r
+    rn = _media_por_anel(np.asarray(r, dtype=float)) if r is not None else np.array([])
+    fin = rn[np.isfinite(rn)]
+    if not fin.size:
+        return CONTROLE_MIN_MM, CONTROLE_MAX_SEM_RAD_MM
+    dmax = math.ceil(20.0 * float(fin.max()) - 1e-9) / 10.0
+    return CONTROLE_MIN_MM, max(CONTROLE_MIN_MM, dmax)
+
+
+def diametros_do_controle(dmin: float, dmax: float) -> list[float]:
+    """Diâmetros da grade do controle (passo de 0,1 mm) como décimos exatos k/10: 2.4, 3.0 e 3.3 saem com os mesmos
+    floats das linhas da tabela."""
+    return [k / 10.0 for k in range(_decimos(dmin), _decimos(dmax) + 1)]
+
+
+def _zonas_sem_fonte(d: float, motivo: str) -> tuple[KeratometryZone, KeratometryZone]:
+    return (KeratometryZone(rotulo=f"Ø {d:g} mm", tipo="circunferencia", diametro_mm=d, validity="indisponivel",
+                            block_reasons=[motivo], centro_xy=(0.0, 0.0)),
+            KeratometryZone(rotulo=f"zona 0–{d:g} mm", tipo="zona", diametro_mm=d, validity="indisponivel",
+                            block_reasons=[motivo], centro_xy=(0.0, 0.0)))
+
+
+def ceratometria_no_diametro(exam: NormalizedExam, diametro_mm: float, cfg: Optional[KeratometryConfig] = None,
+                             qc: Optional[QualityConfig] = None) -> tuple[KeratometryZone, KeratometryZone]:
+    """(circunferência Ø d, zona 0–d), centradas no vértice, para o controle de diâmetro do programa e do HTML.
+
+    Usa as MESMAS funções e limites das linhas da tabela (`_circunferencia` e `_disco`, com a `cfg` e o `qc` da análise):
+    no Ø 3 mm o controle mostra exatamente as linhas "Ø 3 mm" e "zona 0–3 mm". Não altera a análise nem os relatórios."""
+    cfg = cfg or KeratometryConfig()
+    qc = qc or QualityConfig()
+    d = float(diametro_mm)
+    dio, st, r, theta_deg, motivo = _entradas(exam, cfg)
+    if motivo:
+        return _zonas_sem_fonte(d, motivo)
+    theta = np.radians(theta_deg)
+    return _circunferencia(d, dio, st, r, theta, qc), _disco(d, dio, st, r, theta, qc)
+
+
+def _num(v: Any) -> Optional[float]:
+    """Número finito ou None (o JSON da página não aceita NaN)."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def linha_do_controle(z: KeratometryZone) -> dict[str, Any]:
+    """Linha do controle de diâmetro em JSON: o texto formatado como na tabela (`linha_da_zona`), os números (finitos ou
+    None) e os eixos TABO para desenhar os meridianos sobre o mapa."""
+    ln = linha_da_zona(z)
+    disp = ln["disponivel"]
+    return {
+        "rotulo": ln["rotulo"], "disponivel": disp, "validity": ln["validity"], "motivo": ln["motivo"],
+        "texto": ln["texto"],
+        "k1": _num(ln["k1"]) if disp else None, "k2": _num(ln["k2"]) if disp else None,
+        "dk": _num(ln["dk"]) if disp else None, "km": _num(ln["km"]) if disp else None,
+        "eixo_k1": _num(ln["eixo_k1"]) if disp else None, "eixo_k2": _num(ln["eixo_k2"]) if disp else None,
+        "pouco_definido": bool(z.eixo_pouco_definido) and disp, "interpolados": bool(z.marca_interpolados) and disp,
+    }
+
+
+def dados_do_controle(exam: NormalizedExam, cfg: Optional[KeratometryConfig] = None,
+                      qc: Optional[QualityConfig] = None) -> dict[str, Any]:
+    """Grade completa do controle de diâmetro (JSON-ável) para a versão HTML: faixa, passo, diâmetro inicial e, a cada
+    0,1 mm, a circunferência e a zona 0–d (`linha_do_controle`). Os números vêm de `ceratometria_no_diametro`."""
+    cfg = cfg or KeratometryConfig()
+    qc = qc or QualityConfig()
+    dmin, dmax = faixa_do_controle(exam)
+    dio, st, r, theta_deg, motivo = _entradas(exam, cfg)
+    theta = np.radians(theta_deg) if theta_deg is not None else None
+    pontos = []
+    for d in diametros_do_controle(dmin, dmax):
+        if motivo:
+            zc, zd = _zonas_sem_fonte(d, motivo)
+        else:
+            zc, zd = _circunferencia(d, dio, st, r, theta, qc), _disco(d, dio, st, r, theta, qc)
+        pontos.append({"d": d, "circ": linha_do_controle(zc), "zona": linha_do_controle(zd)})
+    return {"dmin": dmin, "dmax": dmax, "passo": CONTROLE_PASSO_MM,
+            "inicial": min(max(CONTROLE_INICIAL_MM, dmin), dmax), "pontos": pontos}

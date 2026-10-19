@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import html
 import io
+import json
 import os
 import tempfile
 from typing import Any, Optional
@@ -23,11 +24,26 @@ from matplotlib.figure import Figure
 
 from . import CORE_VERSION
 from .adapters import AdapterError, import_tms_bundle, list_exams, patient_display_name
-from .keratometry import COLUNAS_TABELA, LEGENDA_TABELA, eixo_tabo, linhas_resumo
+from .keratometry import (
+    COLUNAS_TABELA,
+    CONTROLE_LEGENDA,
+    LEGENDA_TABELA,
+    dados_do_controle,
+    eixo_tabo,
+    faixa_do_controle,
+    linhas_resumo,
+)
 from .model import Analysis, NormalizedExam, QualityConfig, ReconstructionConfig, to_jsonable
 from .pupila import fmt_chord_mu
 from .pipeline import DEFAULT_DIAMETERS, analyze_exam, profiles_for_exam
-from .plots import figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
+from .plots import (
+    figure_resultado_completo,
+    plot_coverage,
+    plot_elevation,
+    plot_topo_map,
+    plot_wavefront,
+    plot_zernike_bars,
+)
 from .reporting import (
     KERATO_TITULO,
     canonical_result,
@@ -179,6 +195,87 @@ def _kerato_table(an: Analysis) -> str:
     return html_
 
 
+# ---------------------------------------------------------------------------
+# Controle de diâmetro da ceratometria (mapa axial + controle deslizante; o desenho é feito por CONTROLE_JS)
+# ---------------------------------------------------------------------------
+_KC_FIGURA_POL = (4.8, 4.0)          # figura do mapa (polegadas); a 110 dpi o PNG tem exatamente 528 × 440 px
+_KC_QUADRO_POL = (0.42, 0.32, 3.3)   # esquerda, base e lado do quadro do mapa (polegadas): QUADRADO também em pixels
+_KC_DPI = 110
+
+
+def _png_mapa_controle(exam: NormalizedExam) -> tuple[str, dict[str, Any]]:
+    """Mapa de potência axial (D) do controle de diâmetro e a geometria da sobreposição SVG.
+
+    Sem bbox_inches="tight" (o recorte deslocaria o quadro): o PNG tem figsize × dpi pixels e `caixa` =
+    [esquerda, topo, largura, altura] do quadro do mapa em frações da imagem, a partir do canto superior esquerdo, lida
+    depois do desenho; `L` = meia largura do quadro em mm (limites simétricos e iguais em x e y, aspecto igual)."""
+    fw, fh = _KC_FIGURA_POL
+    esq, base, lado = _KC_QUADRO_POL
+    fig = Figure(figsize=(fw, fh))
+    ax = fig.add_axes((esq / fw, base / fh, lado / fw, lado / fh))
+    cax = fig.add_axes(((esq + lado + 0.12) / fw, base / fh, 0.14 / fw, lado / fh))
+    if plot_topo_map(ax, exam, "DIO", title="Potência axial (D)", zones=(), pupil=True, cax=cax, fontsize=9) is None:
+        # sem DIO o quadro mostra só o motivo; continua em mm para o círculo do diâmetro escolhido
+        cax.set_visible(False)
+        lim = 0.52 * faixa_do_controle(exam)[1]
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+    else:
+        ax.tick_params(labelsize=7.5)
+        cax.tick_params(labelsize=7.5)
+        cax.yaxis.label.set_size(8)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=_KC_DPI)
+    pos = ax.get_position()                      # quadro final, depois do desenho (aspecto igual já aplicado)
+    (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
+    if not (x1 > 0 and abs(x0 + x1) < 1e-9 and abs(y0 + y1) < 1e-9 and abs(x1 - y1) < 1e-9):
+        raise ValueError(f"limites do mapa não simétricos: x {x0:g}…{x1:g}, y {y0:g}…{y1:g}")
+    geo = {"L": float(x1), "caixa": [round(float(v), 6) for v in (pos.x0, 1.0 - pos.y1, pos.width, pos.height)]}
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii"), geo
+
+
+def _json_no_script(obj: Any) -> str:
+    """JSON para um bloco <script type="application/json">: sem NaN e sem "<" literal (nem "</script" nem "<!--")."""
+    return json.dumps(obj, ensure_ascii=False, allow_nan=False, separators=(",", ":")).replace("<", "\\u003c")
+
+
+def _controle_html(exam: NormalizedExam, an: Analysis) -> str:
+    """Controle de diâmetro (topo da seção de ceratometria, só com mapas): mapa axial com a sobreposição SVG, controle
+    deslizante e as linhas da circunferência Ø d e da zona 0–d. As linhas do diâmetro inicial já vêm preenchidas
+    (leitura e impressão sem JavaScript); a grade completa vai num bloco JSON que CONTROLE_JS (kcBind) lê. Os números
+    vêm de dados_do_controle com a configuração da própria análise: no Ø 3 mm são os da tabela. Sem nome do paciente."""
+    k = an.keratometry
+    dados = dados_do_controle(exam, k.config, an.quality_config)
+    try:
+        src, geo = _png_mapa_controle(exam)
+        mapa = (f"<div class='kc-mapa'><img class='kc-img' src='{src}' width='{round(_KC_FIGURA_POL[0] * _KC_DPI)}' "
+                f"height='{round(_KC_FIGURA_POL[1] * _KC_DPI)}' alt='mapa de potência axial com o diâmetro escolhido'>"
+                f"<svg class='kc-sobre' viewBox='{-geo['L']:.6f} {-geo['L']:.6f} {2 * geo['L']:.6f} {2 * geo['L']:.6f}' "
+                f"style='left:{100 * geo['caixa'][0]:.4f}%;top:{100 * geo['caixa'][1]:.4f}%;"
+                f"width:{100 * geo['caixa'][2]:.4f}%;height:{100 * geo['caixa'][3]:.4f}%' "
+                "aria-hidden='true' focusable='false'></svg></div>")
+    except Exception as e:  # noqa: BLE001
+        geo = None
+        mapa = f"<p class='aviso'>Mapa do controle indisponível: {_e(e)}</p>"
+    p0 = next(p for p in dados["pontos"] if round(p["d"] * 10) == round(dados["inicial"] * 10))
+    # as linhas de _kerato_rows (CONTROLE_JS repete a estrutura, inclusive INDISPONÍVEL × INVÁLIDA)
+    linhas = _kerato_rows([{**p0["circ"], "destaque": ""}, {**p0["zona"], "destaque": "zona"}])
+    head = "<thead><tr>" + "".join(f"<th>{_e(c)}</th>" for c in COLUNAS_TABELA) + "</tr></thead>"
+    legenda = ("Clique ou arraste no mapa (ou use o controle) para escolher o diâmetro. " + CONTROLE_LEGENDA
+               + " No mapa: círculo = diâmetro escolhido (cinza tracejado quando indisponível); linhas = meridianos da "
+               "circunferência, K2 curvo (laranja) e K1 plano (azul), tracejadas com eixo pouco definido; + = vértice; "
+               "contorno tracejado fino = pupila. † pontos interpolados pelo aparelho; * eixo pouco definido (ΔK baixo).")
+    return (
+        "<div class='kc'>" + mapa
+        + "<div class='kc-painel'><div class='kc-controle'><label>Diâmetro "
+        f"<input class='kc-d' type='range' min='{dados['dmin']:.1f}' max='{dados['dmax']:.1f}' step='{dados['passo']:.1f}' "
+        f"value='{dados['inicial']:.1f}'></label><output class='kc-valor' aria-live='polite'>{dados['inicial']:.1f} mm</output></div>"
+        f"<div class='kc-rolagem'><table class='metricas kerato kc-tabela'>{head}<tbody>{linhas}</tbody></table></div>"
+        f"<p class='legenda'>{_e(legenda)}</p></div>"
+        f"<script type='application/json' class='kc-dados'>{_json_no_script({**dados, 'mapa': geo})}</script></div>"
+    )
+
+
 def _num(v: Any) -> Optional[float]:
     """Número finito (float) ou None — o JSON da página não aceita NaN."""
     if v is None:
@@ -239,7 +336,13 @@ def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True, pati
         + "</li></ul></section>"
     )
     metrics = "<section><h3>Resultados por perfil</h3>" + _metrics_table(an) + "</section>"
-    kerato = f"<section class='kerato'><h3>{_e(KERATO_TITULO)}</h3>{_kerato_table(an)}</section>"
+    controle = ""
+    if with_maps and getattr(an, "keratometry", None) is not None:
+        try:
+            controle = _controle_html(exam, an)
+        except Exception as e:  # noqa: BLE001
+            controle = f"<p class='aviso'>Controle de diâmetro indisponível: {_e(e)}</p>"
+    kerato = f"<section class='kerato'><h3>{_e(KERATO_TITULO)}</h3>{controle}{_kerato_table(an)}</section>"
 
     completo = ""
     if with_maps:
@@ -297,10 +400,11 @@ def report_html(exam: NormalizedExam, an: Analysis, with_maps: bool = True, pati
 
 
 def report_document(articles: list[str], title: str = "Aberrometria corneana anterior calculada — relatório de pesquisa") -> str:
-    """Documento HTML completo e autônomo (para salvar/imprimir) com os artigos gerados."""
+    """Documento HTML completo e autônomo (para salvar/imprimir) com os artigos gerados; o controle de diâmetro da
+    ceratometria funciona nele (CONTROLE_JS no fim do corpo)."""
     return ("<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><title>" + _e(title) + "</title><style>"
             + REPORT_CSS + "</style></head><body><main class='relatorio'><h1>" + _e(title) + "</h1>"
-            + "".join(articles) + "</main></body></html>")
+            + "".join(articles) + "</main><script>" + CONTROLE_JS + "\nkcBind(document);</script></body></html>")
 
 
 REPORT_CSS = """
@@ -327,6 +431,20 @@ table.kerato tr.kerato-ref td { color: #777; }
 ul.kerato-notas { margin: 4px 0; padding-left: 18px; }
 details.kerato-aneis { font-size: 12px; margin: 4px 0; }
 details.kerato-aneis > summary { cursor: pointer; color: #1a4f8a; }
+.kc { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-start; margin: 6px 0 12px; }
+.kc-mapa { position: relative; flex: 0 1 440px; max-width: 100%; }
+.kc-img { display: block; width: 100%; height: auto; }
+.kc-sobre { position: absolute; display: block; overflow: hidden; touch-action: none; cursor: crosshair; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+.kc-painel { flex: 1 1 300px; min-width: 0; }
+.kc-controle { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 2px 0 8px; }
+.kc-controle label { display: flex; align-items: center; gap: 8px; flex: 1 1 180px; font-size: 13px; font-weight: bold; }
+.kc-d { flex: 1 1 auto; min-width: 120px; margin: 0; accent-color: #1a4f8a; }
+.kc-valor { font-size: 16px; font-weight: bold; font-variant-numeric: tabular-nums; min-width: 4.6em; }
+.kc-rolagem { overflow-x: auto; }
+@media (max-width: 520px) {
+  table.kc-tabela { font-size: 11px; }
+  table.kc-tabela th, table.kc-tabela td { padding: 2px 3px; }
+}
 .figuras { display: flex; flex-wrap: wrap; gap: 10px; }
 figure { margin: 6px 0; }
 figure img { max-width: 100%; height: auto; border: 1px solid #eee; }
@@ -360,7 +478,177 @@ details.texto pre { font-size: 10.5px; white-space: pre-wrap; background: #f7f7f
   details.zern > summary { display: none; }
   details.zern table { display: table; columns: 2; }
   .no-print { display: none !important; }
+  .kc { break-inside: avoid; page-break-inside: avoid; }
+  .kc-mapa { flex: 0 0 88mm; }
+  .kc-painel { flex: 1 1 80mm; }
+  .kc-d { display: none; }
+  .kc-rolagem { overflow: visible; }
 }
+"""
+
+# Controle de diâmetro da ceratometria no navegador. Uma única cópia: a página (marcador {{CONTROLE_JS}} em
+# web/template.html), o relatório salvo pela página e report_document(). Sem "</script" (vai dentro de <script>).
+CONTROLE_JS = r"""
+/* Controle de diâmetro da ceratometria (tmsab.web.CONTROLE_JS). O controle deslizante ou um clique/arraste no mapa
+   axial escolhe o diâmetro d (décimos de mm); a sobreposição SVG (em mm, y para cima como o mapa, vista do examinador)
+   desenha o círculo Ø d e os meridianos K2 (curvo) e K1 (plano) da circunferência; as duas linhas (circunferência Ø d
+   e zona 0–d) vêm da grade calculada pelo núcleo (bloco JSON .kc-dados). Só mostra números: não recalcula nada. */
+var kcBind = window.kcBind || (function () {
+  "use strict";
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const COR_K1 = "#2a78d6", COR_K2 = "#eb6834";   // as cores do programa (K_COR_K1 plano, K_COR_K2 curvo)
+  const ligados = new WeakSet();                   // sem atributo no DOM: cópias (relatório salvo) são religadas
+
+  function svgNo(pai, tag, attrs) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const k of Object.keys(attrs)) if (attrs[k] !== null && attrs[k] !== undefined) el.setAttribute(k, String(attrs[k]));
+    pai.appendChild(el);
+    return el;
+  }
+
+  function celula(tr, texto) {
+    const td = document.createElement("td");
+    td.textContent = texto;
+    tr.appendChild(td);
+    return td;
+  }
+
+  // a mesma estrutura de _kerato_rows (tmsab/web.py): rótulo + 6 colunas, ou "INDISPONÍVEL — motivo" nas 6 colunas
+  // ("INVÁLIDA" quando o ajuste ficou sem amostras, como na tabela)
+  function linhaTabela(ln, classe) {
+    const tr = document.createElement("tr");
+    if (classe) tr.className = classe;
+    celula(tr, ln.rotulo);
+    if (ln.disponivel) {
+      for (const t of ln.texto) celula(tr, t);
+    } else {
+      const estado = ln.validity === "invalida" ? "INVÁLIDA" : "INDISPONÍVEL";
+      const td = celula(tr, estado + (ln.motivo ? " — " + ln.motivo : ""));
+      td.colSpan = 6;
+      td.className = "motivo";
+    }
+    return tr;
+  }
+
+  function desenhar(svg, L, p) {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const larg = svg.getBoundingClientRect().width;
+    const u = 2 * L / (larg > 0 ? larg : 300);       // mm por pixel: traços e rótulos com tamanho fixo na tela
+    const c = p.circ, r = p.d / 2;
+    const ok = !!(c.disponivel && c.eixo_k1 !== null && c.eixo_k2 !== null);
+    const g = svgNo(svg, "g", { transform: "scale(1,-1)" });   // y para cima, como o mapa
+    const traco = (x1, y1, x2, y2, cor, px, tracos, classe) => svgNo(g, "line", {
+      x1: x1, y1: y1, x2: x2, y2: y2, stroke: cor, "stroke-width": px, "stroke-linecap": "round",
+      "stroke-dasharray": tracos, "vector-effect": "non-scaling-stroke", class: classe });
+    svgNo(g, "circle", { cx: 0, cy: 0, r: r, fill: "none", stroke: "#fff", "stroke-opacity": 0.9, "stroke-width": 4.5,
+                         "vector-effect": "non-scaling-stroke" });
+    svgNo(g, "circle", { class: "kc-circulo", cx: 0, cy: 0, r: r, fill: "none", stroke: ok ? "#111" : "#666",
+                         "stroke-width": ok ? 2 : 1.6, "stroke-dasharray": ok ? null : "6 4",
+                         "vector-effect": "non-scaling-stroke" });
+    // meridiano no eixo TABO a: reta pelo vértice na direção (cos a, sen a); estende-se até 1,12 × o raio
+    const eixos = !ok ? [] : [
+      { nome: "k2", graus: c.eixo_k2, cor: COR_K2, texto: "K2 " + c.texto[3] },
+      { nome: "k1", graus: c.eixo_k1, cor: COR_K1, texto: "K1 " + c.texto[1] },
+    ];
+    const ext = 1.12 * r;
+    for (const e of eixos) {
+      e.ux = Math.cos(e.graus * Math.PI / 180);
+      e.uy = Math.sin(e.graus * Math.PI / 180);
+      traco(-ext * e.ux, -ext * e.uy, ext * e.ux, ext * e.uy, "#fff", 5.5);
+    }
+    for (const e of eixos) {
+      traco(-ext * e.ux, -ext * e.uy, ext * e.ux, ext * e.uy, e.cor, 2.4, c.pouco_definido ? "7 5" : null, "kc-" + e.nome);
+    }
+    const t = 6 * u;                                 // + no vértice
+    traco(-t, 0, t, 0, "#fff", 4); traco(0, -t, 0, t, "#fff", 4);
+    traco(-t, 0, t, 0, "#111", 1.5); traco(0, -t, 0, t, "#111", 1.5);
+    // rótulos fora do grupo invertido (texto em pé), na ponta de cima do meridiano (eixo 1–180°), dentro do quadro
+    const fs = 12.5 * u, m = 3 * u;
+    for (const e of eixos) {
+      const ancora = e.ux > 0.35 ? "start" : (e.ux < -0.35 ? "end" : "middle");
+      const dist = ext + 5 * u + 0.55 * fs * Math.abs(e.uy);
+      const w = 0.62 * fs * e.texto.length, h = fs;           // caixa estimada do texto
+      const desloc = ancora === "start" ? 0 : (ancora === "end" ? w : w / 2);
+      const x0 = Math.min(Math.max(dist * e.ux - desloc, -L + m), L - m - w);
+      const y = Math.min(Math.max(dist * e.uy, -L + m + h / 2), L - m - h / 2);
+      svgNo(svg, "text", { class: "kc-rotulo kc-rotulo-" + e.nome, x: x0 + desloc, y: -y, dy: "0.35em",
+        "text-anchor": ancora, "font-size": fs, "font-weight": "bold", fill: e.cor, stroke: "#fff",
+        "stroke-width": 3 * u, "stroke-linejoin": "round", "paint-order": "stroke" }).textContent = e.texto;
+    }
+  }
+
+  function ligar(raiz) {
+    const dados = JSON.parse(raiz.querySelector("script.kc-dados").textContent);
+    const inp = raiz.querySelector("input.kc-d"), saida = raiz.querySelector("output.kc-valor");
+    const corpo = raiz.querySelector("table.kc-tabela tbody"), svg = dados.mapa ? raiz.querySelector("svg.kc-sobre") : null;
+    const n0 = Math.round(dados.dmin * 10), n1 = Math.round(dados.dmax * 10);
+    const porDecimo = new Map(dados.pontos.map((p) => [Math.round(p.d * 10), p]));
+    inp.min = dados.dmin.toFixed(1);
+    inp.max = dados.dmax.toFixed(1);
+    inp.step = String(dados.passo);
+    let atual = null;
+    function mostrar(d, forcar) {
+      if (!isFinite(d)) return;
+      const n = Math.min(n1, Math.max(n0, Math.round(d * 10)));   // décimos exatos, dentro da faixa
+      const p = porDecimo.get(n);
+      if (!p) return;
+      const txt = (n / 10).toFixed(1);
+      inp.value = txt;
+      if (n === atual && !forcar) return;
+      atual = n;
+      inp.setAttribute("value", txt);                // a cópia salva do relatório reabre neste diâmetro
+      inp.setAttribute("aria-valuetext", txt + " mm");
+      saida.textContent = txt + " mm";
+      while (corpo.firstChild) corpo.removeChild(corpo.firstChild);
+      corpo.appendChild(linhaTabela(p.circ, ""));
+      corpo.appendChild(linhaTabela(p.zona, "kerato-zona"));
+      if (svg) desenhar(svg, dados.mapa.L, p);
+    }
+    inp.addEventListener("input", () => mostrar(parseFloat(inp.value)));
+    inp.addEventListener("change", () => mostrar(parseFloat(inp.value)));
+    if (svg) {
+      let arrastando = false;
+      const peloPonteiro = (ev) => {
+        const ctm = svg.getScreenCTM();
+        if (!ctm) return;
+        const i = ctm.inverse();                     // tela → viewBox (mm, y para baixo)
+        const x = i.a * ev.clientX + i.c * ev.clientY + i.e;
+        const y = -(i.b * ev.clientX + i.d * ev.clientY + i.f);
+        mostrar(Math.round(2 * Math.hypot(x, y) * 10) / 10);
+      };
+      svg.addEventListener("pointerdown", (ev) => {
+        if (ev.pointerType === "mouse" && ev.button !== 0) return;
+        arrastando = true;
+        try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* sem captura: segue pelo pointermove */ }
+        ev.preventDefault();
+        peloPonteiro(ev);
+        try { inp.focus({ preventScroll: true }); } catch (e) { /* foco opcional (setas do teclado) */ }
+      });
+      svg.addEventListener("pointermove", (ev) => { if (arrastando) peloPonteiro(ev); });
+      for (const tipo of ["pointerup", "pointercancel", "lostpointercapture"]) {
+        svg.addEventListener(tipo, () => { arrastando = false; });
+      }
+      // os traços e rótulos têm tamanho fixo em pixels: redesenha quando o mapa muda de tamanho
+      if (typeof ResizeObserver === "function") {
+        new ResizeObserver(() => { if (atual !== null) desenhar(svg, dados.mapa.L, porDecimo.get(atual)); }).observe(svg);
+      }
+    }
+    const d0 = parseFloat(inp.getAttribute("value"));
+    mostrar(isFinite(d0) ? d0 : dados.inicial, true);
+  }
+
+  function kcBind(raiz) {
+    raiz = raiz || document;
+    const blocos = Array.from(raiz.querySelectorAll(".kc"));
+    if (raiz.matches && raiz.matches(".kc")) blocos.unshift(raiz);
+    for (const el of blocos) {
+      if (ligados.has(el)) continue;
+      ligados.add(el);
+      try { ligar(el); } catch (e) { if (window.console) console.warn("controle de diâmetro da ceratometria:", e); }
+    }
+  }
+  return kcBind;
+})();
 """
 
 

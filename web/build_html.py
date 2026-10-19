@@ -37,13 +37,15 @@ def package_zip() -> bytes:
 def build(out_dir: str) -> str:
     sys.path.insert(0, ROOT)
     from tmsab import __version__
-    from tmsab.web import REPORT_CSS
+    from tmsab.web import CONTROLE_JS, REPORT_CSS
+    assert "</script" not in CONTROLE_JS.lower() and "<!--" not in CONTROLE_JS, "CONTROLE_JS fecharia o <script>"
     tpl = open(os.path.join(ROOT, "web", "template.html"), encoding="utf-8").read()
     zb = package_zip()
     html = (tpl.replace("{{VERSION}}", __version__)
                .replace("{{PYODIDE_URL}}", PYODIDE_URL)
                .replace("{{REPORT_CSS_JSON}}", json.dumps(REPORT_CSS))
                .replace("{{REPORT_CSS}}", REPORT_CSS)
+               .replace("{{CONTROLE_JS}}", CONTROLE_JS)
                .replace("{{TMSAB_ZIP_B64}}", base64.b64encode(zb).decode("ascii")))
     assert not re.search(r"\{\{[A-Z_]+\}\}", html), "marcador não substituído"
     os.makedirs(out_dir, exist_ok=True)

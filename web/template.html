@@ -87,6 +87,8 @@ table.exames th { background:#eef1f7; }
   <main class="relatorio" id="report"></main>
 </div>
 
+<!-- controle de diâmetro da ceratometria (tmsab.web.CONTROLE_JS): ligado a cada exame e copiado no relatório salvo -->
+<script id="kc-codigo">{{CONTROLE_JS}}</script>
 <script>
 "use strict";
 const CFG = { version: "{{VERSION}}", pyodideURL: "{{PYODIDE_URL}}" };
@@ -355,6 +357,7 @@ function onResult(m) {
   const bp = document.createElement("button"); bp.textContent = "Imprimir relatório detalhado deste exame"; bp.onclick = () => printOnly(art, false); tb.appendChild(bp);
   art.insertBefore(tb, art.firstChild);
   $("report").appendChild(art);
+  if (typeof kcBind === "function") kcBind(art);   // controle de diâmetro da ceratometria (depois de entrar na página)
   buildTopoPanel(art, key, m.dir, results[key], r);
   $("btnPrint").disabled = false; $("btnSaveHtml").disabled = false; $("btnPrintCompleto").disabled = false;
   setStatus("Exame " + r.exam_id + " " + (r.eye || "") + " calculado (análise " + r.analysis_id.slice(0, 8) + "…).");
@@ -465,7 +468,8 @@ $("btnSaveHtml").onclick = () => {
   main.querySelectorAll("article.exame").forEach((a) => (a.style.display = ""));
   const doc = "<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><title>Aberrometria corneana anterior calculada — relatório</title><style>" + REPORT_CSS +
     "</style></head><body><main class='relatorio'><h1>Aberrometria corneana anterior calculada — relatório de pesquisa (tmsab " + esc(CFG.version) + ")</h1>" + main.innerHTML +
-    "</main><script>window.addEventListener('beforeprint',()=>document.querySelectorAll('details.zern, details.kerato-aneis').forEach(d=>d.open=true));<\/script></body></html>";
+    "</main><script>window.addEventListener('beforeprint',()=>document.querySelectorAll('details.zern, details.kerato-aneis').forEach(d=>d.open=true));<\/script>" +
+    "<script>" + $("kc-codigo").textContent + "\nkcBind(document);<\/script></body></html>";
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([doc], { type: "text/html" }));
   const ids = Object.values(results).map((r) => r.study_id).filter((v, i, s) => s.indexOf(v) === i).join("_") || "relatorio";
   a.download = "relatorio_" + ids + ".html"; a.click();

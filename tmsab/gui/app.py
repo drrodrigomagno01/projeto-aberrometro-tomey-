@@ -68,6 +68,32 @@ def run_smoke(app: QApplication, win, synth_dir: str | None, screenshot: str | N
         assert tsv.splitlines()[1].split("\t")[:3] == ["Zona", "K1 plano (D)", "eixo K1"], tsv[:200]
         if app.platformName() == "offscreen":   # área de transferência só sem tela (não mexe na do usuário)
             assert win.copy_keratometry_tsv() == tsv and QApplication.clipboard().text() == tsv, "cópia TSV falhou"
+        # controle de diâmetro (sub-aba do mapa axial): no Ø escolhido, os mesmos textos da linha da tabela
+        subabas = [win.k_subtabs.tabText(i) for i in range(win.k_subtabs.count())]
+        assert subabas == ["Mapa axial — diâmetro", "Gráficos por diâmetro"], subabas
+        assert win.k_slider.isEnabled() and win.k_spin.isEnabled(), "controle de diâmetro desabilitado"
+        from PySide6.QtGui import QTextDocument
+
+        def _leitura() -> str:
+            doc = QTextDocument()
+            doc.setHtml(win.k_leitura.text())
+            return doc.toPlainText().replace("\xa0", " ")
+
+        def _textos_da_linha(rotulo: str) -> list[str]:          # K1, eixo K1, K2, eixo K2, ΔK, Km na tela
+            for r in range(win.k_table.rowCount()):
+                it = win.k_table.item(r, 0)
+                if it is not None and it.text().rstrip(" †*") == rotulo:
+                    return [win.k_table.item(r, c).text() for c in range(1, 7)]
+            raise AssertionError(f"linha {rotulo} ausente na tabela")
+
+        for ajustar, rotulo in ((lambda: win.k_slider.setValue(30), "Ø 3 mm"), (lambda: win.k_spin.setValue(2.4), "Ø 2.4 mm")):
+            ajustar()
+            app.processEvents()
+            t = _textos_da_linha(rotulo)
+            esperado = f"K1 plano {t[0]} D @ {t[1]} · K2 curvo {t[2]} D @ {t[3]} · ΔK {t[4]} D · Km {t[5]} D"
+            primeira = _leitura().splitlines()[0]
+            assert primeira.startswith(rotulo) and esperado in primeira, f"{rotulo}: {primeira!r} ≠ tabela {t}"
+        assert abs(win.k_spin.value() - 2.4) < 1e-9 and win.k_slider.value() == 24
         # comparação A × B no primeiro perfil disponível
         win.refresh_compare_controls()
         win.cmp_a.setCurrentIndex(win.cmp_a.findData(keys[0]))
@@ -92,6 +118,8 @@ def run_smoke(app: QApplication, win, synth_dir: str | None, screenshot: str | N
         assert win.packages[keys[0]].analysis is None and win.packages[keys[0]].status == "desatualizado"
         assert win.bn["sa"].val.text() == "—"
         assert win.k_table.rowCount() == 0 and win.k_bn["pupila"].val.text() == "—", "ceratometria antiga ainda na tela"
+        assert not win.k_slider.isEnabled() and not win.k_spin.isEnabled() and win.k_leitura.text() == "", \
+            "controle de diâmetro com números antigos"
         win.order_spin.setValue(6)
         # caminho com thread (worker + sinais), com espera limitada
         from PySide6.QtCore import QEventLoop, QTimer

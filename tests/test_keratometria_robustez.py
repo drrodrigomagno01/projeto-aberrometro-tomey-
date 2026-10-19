@@ -86,6 +86,18 @@ def test_contorno_pupilar_parcial_reduz_a_cobertura(tmp_path):
     assert any("sem borda" in n for n in k.pupila.notes)
 
 
+def test_meridianos_sem_borda_ficam_fora_da_media_da_pupila(tmp_path):
+    # 20 de 256 meridianos sem borda (8%): a zona pupilar continua disponível (cobertura 92%) e esses meridianos não
+    # entram na média — se entrassem com os 25 anéis, o Km cairia 0,2–0,9 D puxado pela periferia
+    _, ex = _exame(tmp_path, "pupfuros", cyl_D=2.0, pupil_center=(0.2, -0.1))
+    cheia = compute_keratometry(ex).pupila
+    ex.pupil.edge_r = np.asarray(ex.pupil.edge_r, dtype=float).copy()
+    ex.pupil.edge_r[::13] = 0.0
+    z = compute_keratometry(ex).pupila
+    assert z.validity == "disponivel" and z.fracao_cobertura == pytest.approx(236 / 256)
+    assert any("20 meridianos sem borda" in n for n in z.notes) and z.n_amostras < cheia.n_amostras
+    assert abs(z.k_medio_D - cheia.k_medio_D) < 0.005 and abs(z.delta_k_D - cheia.delta_k_D) < 0.005
+
 def test_zona_dentro_da_lacuna_central_fica_indisponivel_com_motivo(tmp_path):
     _, ex = _exame(tmp_path, "lacuna")
     z = compute_keratometry(ex, KeratometryConfig(zonas_disco_mm=(0.3,))).discos[0]

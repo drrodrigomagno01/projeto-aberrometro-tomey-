@@ -6,15 +6,21 @@ Estados por pacote: carregado (importado, sem cálculo) · calculando · calcula
 from __future__ import annotations
 
 import dataclasses
+import html
 import json
+import math
 import os
 import tempfile
 from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
+from matplotlib import patheffects
+from matplotlib.backend_bases import MouseButton
 from matplotlib.lines import Line2D
-from PySide6.QtCore import Qt, Slot
+from matplotlib.patches import Circle
+from matplotlib.text import Text
+from PySide6.QtCore import QLocale, QSize, Qt, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -41,6 +47,7 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -52,10 +59,31 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..adapters import AdapterError, detect_profile, import_tms_bundle, list_exams, patient_display_name
-from ..keratometry import COLUNAS_TABELA, LEGENDA_TABELA, eixo_tabo, linhas_resumo
-from ..model import Analysis, KeratometryResult, NormalizedExam, OpticalProfile, QualityConfig, ReconstructionConfig, WavefrontResult
+from ..keratometry import (
+    COLUNAS_TABELA,
+    CONTROLE_INICIAL_MM,
+    CONTROLE_LEGENDA,
+    CONTROLE_MAX_SEM_RAD_MM,
+    CONTROLE_MIN_MM,
+    LEGENDA_TABELA,
+    ceratometria_no_diametro,
+    eixo_tabo,
+    faixa_do_controle,
+    fmt_eixo,
+    linha_da_zona,
+    linhas_resumo,
+)
+from ..model import Analysis, KeratometryResult, KeratometryZone, NormalizedExam, OpticalProfile, QualityConfig, ReconstructionConfig, WavefrontResult
 from ..pipeline import default_profiles, profiles_for_exam
-from ..plots import compare_scale, figure_resultado_completo, plot_coverage, plot_elevation, plot_wavefront, plot_zernike_bars
+from ..plots import (
+    compare_scale,
+    figure_resultado_completo,
+    plot_coverage,
+    plot_elevation,
+    plot_topo_map,
+    plot_wavefront,
+    plot_zernike_bars,
+)
 from ..pupila import chord_mu_aparente, fmt_chord_mu
 from ..topo import ViewOptions, figure_tms_view, zone_axis_stats
 from ..reporting import export_all, report_lines
@@ -123,6 +151,8 @@ class BigNumber(QWidget):
         self.val.setFont(f)
         self.sub = QLabel("")
         self.sub.setStyleSheet("color: #555; font-size: 10px;")
+        self.sub.setWordWrap(True)
+        self.sub.setMinimumWidth(120)        # texto longo quebra a linha em vez de alargar a janela (tela de 1366 px)
         lay.addWidget(self.cap)
         lay.addWidget(self.val)
         lay.addWidget(self.sub)
@@ -131,6 +161,20 @@ class BigNumber(QWidget):
     def set_value(self, text: Optional[str], sub: str = "") -> None:
         self.val.setText(text if text else "—")
         self.sub.setText(sub)
+
+
+class _CaixaDiametro(QDoubleSpinBox):
+    """Caixa do diâmetro com ponto decimal, como as tabelas e o mapa; a vírgula digitada (teclado ABNT) vira ponto."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setLocale(QLocale.c())
+
+    def validate(self, text, pos):
+        return super().validate(text.replace(",", "."), pos)
+
+    def valueFromText(self, text):  # noqa: N802
+        return super().valueFromText(text.replace(",", "."))
 
 
 def _fmt(v, nd: int = 4, sign: bool = True) -> str:
@@ -150,6 +194,37 @@ K_LEGENDA_COLUNAS_EXTRAS = ("% interp. = fração dos meridianos (na zona pupila
 K_SEPARADOR_ANEIS = "anéis medidos (Ø medido)"
 K_COR_K1, K_COR_K2 = "#2a78d6", "#eb6834"          # K1 plano / K2 curvo — as mesmas cores nos dois gráficos
 K_TINTA, K_TINTA_FRACA, K_GRADE, K_EIXO = "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
+# controle de diâmetro: linha do diâmetro escolhido nos gráficos (traço-ponto escuro; a pupila é tracejada e mais clara)
+K_COR_ESCOLHIDO = "#1c1b19"
+K_TEXTO_K1, K_TEXTO_K2 = "#1f5fae", "#b4501a"     # os mesmos matizes, mais escuros: texto pequeno legível (≥ 4,5:1)
+K_HALO = [patheffects.withStroke(linewidth=3.4, foreground="white")]          # traços sobre o mapa colorido
+K_HALO_TEXTO = [patheffects.withStroke(linewidth=2.6, foreground="white")]
+K_DICA_MAPA = "Clique ou arraste no mapa para escolher o diâmetro."
+
+
+class _RotuloMeridiano(Text):
+    """Rótulo na ponta do meridiano sobre o mapa. Ao desenhar (leiaute final, qualquer tamanho de janela), entra no mapa
+    se passaria da borda; com o mapa ampliado e a ponta fora da vista, o recorte dos eixos o esconde."""
+
+    def draw(self, renderer):
+        ax = self.axes
+        if not self.get_visible() or ax is None or not self.get_text():
+            return super().draw(renderer)
+        pos = self.get_position()
+        x, y = ax.transData.transform(pos)
+        ab = ax.bbox
+        if not (ab.x0 <= x <= ab.x1 and ab.y0 <= y <= ab.y1):
+            return super().draw(renderer)
+        bb = self.get_window_extent(renderer)
+        dx = max(0.0, ab.x0 + 2 - bb.x0) - max(0.0, bb.x1 - ab.x1 + 2)
+        dy = max(0.0, ab.y0 + 2 - bb.y0) - max(0.0, bb.y1 - ab.y1 + 2)
+        if not (dx or dy):
+            return super().draw(renderer)
+        self.set_position(tuple(ax.transData.inverted().transform((x + dx, y + dy))))
+        try:
+            return super().draw(renderer)
+        finally:
+            self.set_position(pos)
 
 
 def _fmt_j(v) -> str:
@@ -367,12 +442,13 @@ class MainWindow(QMainWindow):
             "diametro": BigNumber("Diâmetro pupilar desta captura"),
         }
         for i, key in enumerate(("pupila", "simk", "diametro")):
-            self.k_bn[key].sub.setWordWrap(True)
-            self.k_bn[key].sub.setMinimumWidth(120)       # texto longo quebra a linha em vez de alargar a janela
             grid.addWidget(self.k_bn[key], 0, i)
             grid.setColumnStretch(i, 2 if key == "diametro" else 3)
         lay.addWidget(box)
+        # à esquerda: tabela, cópia/legenda e notas; à direita, na altura toda: o mapa axial com o controle de diâmetro
+        # (padrão) e os gráficos por diâmetro — na janela padrão (1366×768) o mapa não caberia só ao lado da tabela
         split = QSplitter(Qt.Horizontal)
+        esq = QWidget(); el = QVBoxLayout(esq); el.setContentsMargins(0, 0, 0, 0)
         self.k_table = QTableWidget(0, len(K_COLUNAS))
         self.k_table.setHorizontalHeaderLabels([_cabecalho_k(c) for c in K_COLUNAS])
         self.k_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -382,12 +458,7 @@ class MainWindow(QMainWindow):
         self.k_table.verticalHeader().setDefaultSectionSize(self.k_table.fontMetrics().height() + 8)
         self.k_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.k_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        split.addWidget(self.k_table)
-        self.cv_kerato = MplCanvas(width=4.4, height=5.0)
-        split.addWidget(self.cv_kerato)
-        split.setStretchFactor(0, 3); split.setStretchFactor(1, 2)
-        split.setSizes([640, 420])
-        lay.addWidget(split, 1)
+        el.addWidget(self.k_table, 1)
         base = QHBoxLayout()
         self.btn_k_copy = QPushButton("Copiar tabela (TSV)")
         self.btn_k_copy.setToolTip("Copia a tabela como está na tela (colunas separadas por tabulação), para colar numa planilha. "
@@ -399,10 +470,77 @@ class MainWindow(QMainWindow):
         self.k_legend.setWordWrap(True)
         self.k_legend.setStyleSheet("color:#444; font-size:10px;")
         base.addWidget(self.k_legend, 1)
-        lay.addLayout(base)
+        el.addLayout(base)
         self.k_notes = QPlainTextEdit(); self.k_notes.setReadOnly(True); self.k_notes.setMaximumHeight(96)
         self.k_notes.setPlaceholderText("Conferência com o TMS (SimK e ACP) e notas da ceratometria (após calcular)")
-        lay.addWidget(self.k_notes)
+        el.addWidget(self.k_notes)
+        split.addWidget(esq)
+        self.k_subtabs = QTabWidget()
+        self.k_subtabs.setDocumentMode(True)
+        self.k_subtabs.addTab(self._build_k_mapa(), "Mapa axial — diâmetro")
+        self.cv_kerato = MplCanvas(width=4.4, height=5.0)
+        self.k_subtabs.addTab(self.cv_kerato, "Gráficos por diâmetro")
+        self.k_subtabs.currentChanged.connect(self._k_subaba_mudou)
+        split.addWidget(self.k_subtabs)
+        split.setStretchFactor(0, 0); split.setStretchFactor(1, 1)     # a tabela tem largura fixa; a sobra vai para o mapa
+        split.setSizes([560, 480])
+        self.k_split, self._k_divisao_manual = split, False
+        split.splitterMoved.connect(self._k_divisao_movida)
+        lay.addWidget(split, 1)
+        return w
+
+    def _build_k_mapa(self) -> QWidget:
+        """Controle de diâmetro: o usuário escolhe Ø d (barra, caixa ou clique no mapa) e vê a circunferência Ø d e a zona
+        0–d no vértice, calculadas pelo núcleo (ceratometria_no_diametro) com a configuração da própria análise — no
+        Ø 3 mm são exatamente as linhas da tabela. Só exibe números; não altera a análise nem os relatórios."""
+        w = QWidget(); lay = QVBoxLayout(w)
+        lay.setContentsMargins(4, 4, 4, 2); lay.setSpacing(2)
+        self._k_decimos = int(round(CONTROLE_INICIAL_MM * 10))     # escolha do usuário (décimos de mm), mantida entre exames
+        self._k_st: Optional[PackageState] = None                  # pacote mostrado no controle (None = controle vazio)
+        self._k_cache: dict[tuple[str, int], tuple] = {}           # (analysis_id, décimos) -> (circunferência, zona 0–d)
+        self._k_arrastando = False
+        self._k_marcas: list = []                                  # linha do diâmetro escolhido nos dois gráficos
+        self._k_sem_mapa()
+        row = QHBoxLayout(); row.setSpacing(6)
+        row.addWidget(QLabel("Diâmetro:"))
+        dica = ("Diâmetro da circunferência e da zona 0–d, centradas no vértice: arraste, use as setas ou clique no mapa "
+                "(passo de 0.1 mm).")
+        self.k_slider = QSlider(Qt.Horizontal)
+        self.k_slider.setSingleStep(1); self.k_slider.setPageStep(5)          # setas: 0.1 mm; PgUp/PgDn: 0.5 mm
+        self.k_slider.setTickPosition(QSlider.TicksBelow); self.k_slider.setTickInterval(10)
+        self.k_spin = _CaixaDiametro()
+        self.k_spin.setDecimals(1); self.k_spin.setSingleStep(0.1); self.k_spin.setSuffix(" mm")
+        lo, hi = int(round(CONTROLE_MIN_MM * 10)), int(round(CONTROLE_MAX_SEM_RAD_MM * 10))
+        self.k_slider.setRange(lo, hi); self.k_spin.setRange(lo / 10.0, hi / 10.0)
+        self.k_slider.setValue(self._k_decimos); self.k_spin.setValue(self._k_decimos / 10.0)
+        for x in (self.k_slider, self.k_spin):
+            x.setToolTip(dica)
+            x.setEnabled(False)
+        self.k_slider.valueChanged.connect(self._k_slider_mudou)
+        self.k_spin.valueChanged.connect(self._k_spin_mudou)
+        row.addWidget(self.k_slider, 1); row.addWidget(self.k_spin)
+        lay.addLayout(row)
+        self.cv_kmapa = MplCanvas(width=4.4, height=4.0)
+        if self.cv_kmapa.toolbar is not None:              # ícones menores: sobra altura para o mapa na janela padrão
+            self.cv_kmapa.toolbar.setIconSize(QSize(18, 18))
+        for nome, fn in (("button_press_event", self._k_mapa_press), ("motion_notify_event", self._k_mapa_move),
+                         ("button_release_event", self._k_mapa_release)):
+            self.cv_kmapa.canvas.mpl_connect(nome, fn)
+        lay.addWidget(self.cv_kmapa, 1)
+        self.k_leitura = QLabel("")
+        self.k_leitura.setTextFormat(Qt.RichText)
+        self.k_leitura.setWordWrap(True)
+        self.k_leitura.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.k_leitura.setToolTip(CONTROLE_LEGENDA)
+        self.k_leitura.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        # altura das 2 linhas quebradas + legenda das marcas: o mapa não "pula" ao arrastar entre diâmetros
+        self.k_leitura.setMinimumHeight(5 * self.k_leitura.fontMetrics().lineSpacing())
+        lay.addWidget(self.k_leitura)
+        self.k_dica = QLabel(K_DICA_MAPA)
+        self.k_dica.setStyleSheet("color:#6b6b6b; font-size:10px;")
+        self.k_dica.setWordWrap(True)
+        self.k_dica.setToolTip(CONTROLE_LEGENDA)
+        lay.addWidget(self.k_dica)
         return w
 
     def _build_import_tab(self) -> QWidget:
@@ -1182,6 +1320,7 @@ class MainWindow(QMainWindow):
         self.k_notes.clear()
         self.btn_k_copy.setEnabled(False)
         self._k_canvas_msg(canvas_msg)
+        self._k_limpar_controle(canvas_msg)
 
     def fill_keratometry_tab(self, st: PackageState) -> None:
         if st.exam is None:
@@ -1223,12 +1362,23 @@ class MainWindow(QMainWindow):
             self.k_state.setStyleSheet("color:#1b5e20;")
         self._fill_k_numbers(st.analysis, kres, linhas)
         self._fill_k_table(linhas, zonas, qc)
+        self._k_ajustar_divisao()
         self._fill_k_notes(kres, linhas)
         self.btn_k_copy.setEnabled(self.k_table.rowCount() > 0)
+        try:
+            self._k_preparar_controle(st)           # faixa e diâmetro antes dos gráficos (a linha do escolhido)
+        except Exception as e:  # noqa: BLE001
+            self._k_limpar_controle(f"controle de diâmetro indisponível: {type(e).__name__}: {e}")
         try:
             self._plot_keratometry(st.analysis, kres, qc)
         except Exception as e:  # noqa: BLE001
             self._k_canvas_msg(f"erro ao desenhar: {type(e).__name__}: {e}")
+        if self._k_st is not None:
+            try:
+                self._k_desenhar_mapa(st.exam)
+            except Exception as e:  # noqa: BLE001
+                self._k_mapa_msg(f"erro ao desenhar o mapa: {type(e).__name__}: {e}")
+            self._k_atualizar()
 
     def _fill_k_numbers(self, analysis: Analysis, kres: KeratometryResult, linhas: list[dict]) -> None:
         lp = next((ln for ln in linhas if ln["destaque"] == "pupila"), None)
@@ -1340,6 +1490,7 @@ class MainWindow(QMainWindow):
 
     def _k_canvas_msg(self, msg: str) -> None:
         """Mensagem no lugar dos gráficos; antes devolve a figura ao leiaute simples (o MplCanvas usa tight_layout)."""
+        self._k_marcas = []
         self.cv_kerato.figure.set_layout_engine("none")
         self.cv_kerato.clear(msg)
 
@@ -1358,6 +1509,7 @@ class MainWindow(QMainWindow):
             return
         fig = self.cv_kerato.figure
         fig.clear()
+        self._k_marcas = []
         fig.set_layout_engine("constrained", h_pad=0.04, w_pad=0.04)   # refaz o leiaute a cada redimensionamento
         ax1 = fig.add_subplot(2, 1, 1)
         ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
@@ -1394,6 +1546,9 @@ class MainWindow(QMainWindow):
             a_direita = dpup < 0.7 * xmax
             ax1.text(dpup + (0.1 if a_direita else -0.1), 0.97, f"pupila Ø {dpup:.2f} mm", transform=ax1.get_xaxis_transform(),
                      ha="left" if a_direita else "right", va="top", fontsize=7.5, color=K_TINTA)
+        if self._k_st is not None:      # diâmetro do controle (sub-aba do mapa): traço-ponto, movido em _k_atualizar
+            d = self.k_slider.value() / 10.0
+            self._k_marcas = [ax.axvline(d, color=K_COR_ESCOLHIDO, lw=1.2, ls="-.", zorder=2.5) for ax in (ax1, ax2)]
         k = ks[np.isfinite(ks)]
         meio, meia = 0.5 * (k.min() + k.max()), 0.5 * max(k.max() - k.min(), 1.0) * 1.15   # escala mínima de 1 D
         ax1.set_ylim(meio - meia, meio + meia)
@@ -1415,9 +1570,243 @@ class MainWindow(QMainWindow):
                         label=f"eixo pouco definido (ΔK < {qc.k_axis_min_cyl_D:.2f} D)")]
         if tem_simk:
             alcas.append(Line2D([], [], color=K_TINTA, ls="none", marker="D", ms=4.5, mec="white", label="SimK do TMS"))
+        if self._k_marcas:
+            alcas.append(Line2D([], [], color=K_COR_ESCOLHIDO, lw=1.2, ls="-.", label="diâmetro escolhido"))
         fig.legend(handles=alcas, loc="outside lower center", ncol=2, fontsize=7, frameon=False, labelcolor=K_TINTA,
                    handletextpad=0.4, columnspacing=1.0)
         self.cv_kerato.canvas.draw_idle()
+
+    # ---- controle de diâmetro (sub-aba "Mapa axial — diâmetro")
+    @Slot(int, int)
+    def _k_divisao_movida(self, _pos: int, _indice: int) -> None:
+        self._k_divisao_manual = True
+
+    def _k_ajustar_divisao(self) -> None:
+        """Tabela na largura do conteúdo (todas as colunas, sem barra horizontal com a fonte do sistema) e o resto para o
+        mapa — até o usuário mover a divisória."""
+        if self._k_divisao_manual:
+            return
+        t = self.k_table
+        larg = t.horizontalHeader().length() + t.verticalScrollBar().sizeHint().width() + 2 * t.frameWidth()
+        tam = self.k_split.sizes()
+        if larg > 0 and len(tam) == 2 and tam[0] != larg:
+            self.k_split.setSizes([larg, max(sum(tam) - larg, 1)])
+
+    def _k_sem_mapa(self) -> None:
+        """Esquece os artistas do mapa (figura limpa ou com mensagem): cliques e atualizações passam a ser ignorados."""
+        self._k_ax = None
+        self._k_lim = 5.0
+        self._k_circulo = None
+        self._k_vertice = None
+        self._k_merid: dict = {}
+        self._k_rot: dict = {}
+
+    def _k_mapa_msg(self, msg: str) -> None:
+        self._k_sem_mapa()
+        self.cv_kmapa.figure.set_layout_engine("none")
+        self.cv_kmapa.clear(msg)
+
+    def _k_limpar_controle(self, msg: str) -> None:
+        """Sem números antigos: controle desabilitado, mapa com a mensagem, leitura vazia (as linhas dos gráficos já
+        saíram com a figura)."""
+        self._k_st = None
+        self._k_cache.clear()
+        self._k_arrastando = False
+        for x in (self.k_slider, self.k_spin):
+            x.setEnabled(False)
+        self.k_leitura.setText("")
+        self._k_mapa_msg(msg)
+
+    def _k_preparar_controle(self, st: PackageState) -> None:
+        """Faixa do exame (décimos exatos) e o diâmetro escolhido, limitado a ela; sem disparar atualizações."""
+        if any(chave[0] != st.analysis.analysis_id for chave in self._k_cache):
+            self._k_cache.clear()                   # outro exame ou outra análise: o cache só guarda a atual
+        self._k_st = st
+        dmin, dmax = faixa_do_controle(st.exam)
+        lo, hi = int(round(dmin * 10)), int(round(dmax * 10))
+        dec = min(max(self._k_decimos, lo), hi)
+        for x in (self.k_slider, self.k_spin):
+            x.blockSignals(True)
+        try:
+            self.k_slider.setRange(lo, hi); self.k_spin.setRange(lo / 10.0, hi / 10.0)
+            self.k_slider.setValue(dec); self.k_spin.setValue(dec / 10.0)
+        finally:
+            for x in (self.k_slider, self.k_spin):
+                x.blockSignals(False)
+                x.setEnabled(True)
+
+    @Slot(int)
+    def _k_slider_mudou(self, dec: int) -> None:
+        self.k_spin.blockSignals(True)
+        self.k_spin.setValue(dec / 10.0)
+        self.k_spin.blockSignals(False)
+        self._k_decimos = dec
+        self._k_atualizar()
+
+    @Slot(float)
+    def _k_spin_mudou(self, v: float) -> None:
+        dec = int(round(v * 10.0))
+        self.k_slider.blockSignals(True)
+        self.k_slider.setValue(dec)
+        self.k_slider.blockSignals(False)
+        self._k_decimos = self.k_slider.value()
+        self._k_atualizar()
+
+    def _k_zonas_no_diametro(self, st: PackageState, dec: int) -> tuple[KeratometryZone, KeratometryZone]:
+        """(circunferência Ø d, zona 0–d) com a configuração da análise (os mesmos números da tabela), em cache."""
+        a = st.analysis
+        chave = (a.analysis_id, dec)
+        if chave not in self._k_cache:
+            self._k_cache[chave] = ceratometria_no_diametro(st.exam, dec / 10.0, a.keratometry.config, a.quality_config)
+        return self._k_cache[chave]
+
+    @staticmethod
+    def _k_linha_html(z: KeratometryZone, descricao: str) -> str:
+        """Uma linha da leitura com o texto de linha_da_zona (a formatação da tabela); indisponível = motivo, nunca zero."""
+        ln = linha_da_zona(z)
+        rot = html.escape(ln["rotulo"])
+        if not ln["disponivel"]:
+            motivo = html.escape(ln["motivo"] or ln["validity"])
+            estado = "inválida" if ln["validity"] == "invalida" else "indisponível"
+            return f'<span style="color:#7a7a7a;"><b>{rot}</b>: {estado} — {motivo}</span>'
+        t = ln["texto"]
+        juntos = lambda s: s.replace(" ", "&nbsp;")       # noqa: E731  (a linha só quebra depois de um " · ")
+        termos = [f'<span style="color:{K_TEXTO_K1};">{juntos(f"K1 plano {t[0]} D @ {t[1]}")}</span>',
+                  f'<span style="color:{K_TEXTO_K2};">{juntos(f"K2 curvo {t[2]} D @ {t[3]}")}</span>',
+                  juntos(f"ΔK {t[4]} D"), juntos(f"Km {t[5]} D")]
+        return f"<b>{juntos(rot)}</b> ({descricao}): " + "&nbsp;· ".join(termos)
+
+    def _k_leitura_html(self, zc: KeratometryZone, zd: KeratometryZone, qc: QualityConfig) -> str:
+        linhas = [self._k_linha_html(zc, "circunferência no vértice"), self._k_linha_html(zd, "média pela área")]
+        disp = [z for z in (zc, zd) if z.validity == "disponivel"]
+        marcas = []
+        if any(z.marca_interpolados for z in disp):
+            marcas.append("† pontos interpolados pelo aparelho")
+        if any(z.eixo_pouco_definido for z in disp):
+            marcas.append(f"* eixo pouco definido (ΔK &lt; {qc.k_axis_min_cyl_D:.2f} D)")
+        if marcas:
+            linhas.append(f'<span style="color:#6b6b6b; font-size:10px;">{"; ".join(marcas)}</span>')
+        return "<br>".join(linhas)
+
+    def _k_atualizar(self) -> None:
+        """Diâmetro escolhido -> leitura, circunferência e meridianos no mapa, linha nos gráficos (nunca derruba a janela)."""
+        st = self._k_st
+        if st is None or st.exam is None or st.analysis is None or st.analysis.keratometry is None:
+            return
+        dec = self.k_slider.value()
+        d = dec / 10.0
+        zc = None
+        try:
+            zc, zd = self._k_zonas_no_diametro(st, dec)
+            self.k_leitura.setText(self._k_leitura_html(zc, zd, st.analysis.quality_config))
+        except Exception as e:  # noqa: BLE001
+            self.k_leitura.setText(f'<span style="color:#8B0000;">Ø {d:.1f} mm: erro no cálculo — '
+                                   f'{html.escape(type(e).__name__)}: {html.escape(str(e))}</span>')
+        try:
+            self._k_desenhar_sobreposicao(d, zc)
+        except Exception as e:  # noqa: BLE001
+            self._k_mapa_msg(f"erro ao desenhar o mapa: {type(e).__name__}: {e}")
+        try:
+            for m in self._k_marcas:
+                m.set_xdata([d, d])
+            if self._k_marcas and self.cv_kerato.isVisible():     # oculta: redesenha ao trocar de sub-aba
+                self.cv_kerato.canvas.draw_idle()
+        except Exception as e:  # noqa: BLE001
+            self._k_canvas_msg(f"erro ao desenhar: {type(e).__name__}: {e}")
+
+    @Slot(int)
+    def _k_subaba_mudou(self, i: int) -> None:
+        """Os gráficos não são redesenhados enquanto ocultos (arrastar no mapa fica leve): redesenha ao mostrá-los."""
+        if self.k_subtabs.widget(i) is self.cv_kerato and self._k_marcas:
+            try:
+                self.cv_kerato.canvas.draw()
+            except Exception as e:  # noqa: BLE001
+                self._k_canvas_msg(f"erro ao desenhar: {type(e).__name__}: {e}")
+
+    def _k_desenhar_mapa(self, exam: NormalizedExam) -> None:
+        """Mapa axial (DIO) uma vez por exame, com os artistas do controle; cada diâmetro só os atualiza."""
+        fig = self.cv_kmapa.figure
+        fig.clear()
+        self._k_sem_mapa()
+        fig.set_layout_engine("constrained", h_pad=0.02, w_pad=0.02)
+        ax = fig.add_subplot(111)
+        pm = plot_topo_map(ax, exam, "DIO", title="Potência axial (D)", zones=(), pupil=True, colorbar=True, fontsize=8.5)
+        if self.cv_kmapa.toolbar is not None:
+            self.cv_kmapa.toolbar.update()          # "início" do zoom volta a este mapa
+        if pm is None:                              # sem a tabela DIO: o mapa diz "ausente"; a leitura traz o motivo
+            fig.set_layout_engine("none")
+            self.cv_kmapa.canvas.draw_idle()
+            return
+        ax.tick_params(labelsize=7)
+        self._k_lim = float(ax.get_xlim()[1])
+        self._k_circulo = Circle((0.0, 0.0), 1.5, fill=False, ec="black", lw=1.6, zorder=6, path_effects=K_HALO)
+        ax.add_patch(self._k_circulo)
+        for chave, cor in (("k1", K_COR_K1), ("k2", K_COR_K2)):
+            self._k_merid[chave], = ax.plot([], [], color=cor, lw=2.0, solid_capstyle="round", zorder=7,
+                                            path_effects=K_HALO)
+            self._k_rot[chave] = _RotuloMeridiano(0.0, 0.0, "", color=cor, fontsize=7.5, fontweight="bold", zorder=8,
+                                                  clip_on=True, path_effects=K_HALO_TEXTO)
+            ax.add_artist(self._k_rot[chave])
+        self._k_vertice, = ax.plot([0.0], [0.0], marker="+", ms=9, mew=1.5, color="black", zorder=9, path_effects=K_HALO)
+        self._k_ax = ax
+
+    def _k_desenhar_sobreposicao(self, d: float, zc: Optional[KeratometryZone]) -> None:
+        """Circunferência Ø d no vértice e meridianos K2 (curvo) e K1 (plano) nos eixos TABO da circunferência (x para a
+        direita do examinador, y para cima: o meridiano a° passa pelo vértice na direção (cos a, sen a))."""
+        ax = self._k_ax
+        if ax is None:
+            return
+        disp = zc is not None and zc.validity == "disponivel"
+        self._k_circulo.set_radius(d / 2.0)
+        self._k_circulo.set_edgecolor("black" if disp else "#6b6b6b")
+        self._k_circulo.set_linestyle("solid" if disp else (0, (4, 3)))
+        pouco = disp and zc.eixo_pouco_definido
+        meia = 1.12 * d / 2.0
+        for chave, nome in (("k2", "K2"), ("k1", "K1")):
+            linha, rot = self._k_merid[chave], self._k_rot[chave]
+            eixo = (zc.eixo_k2_deg if chave == "k2" else zc.eixo_k1_deg) if disp else None
+            if eixo is None or not math.isfinite(eixo):
+                linha.set_visible(False); rot.set_visible(False)
+                continue
+            ux, uy = math.cos(math.radians(eixo)), math.sin(math.radians(eixo))
+            linha.set_data([-meia * ux, meia * ux], [-meia * uy, meia * uy])
+            linha.set_linestyle((0, (3, 2)) if pouco else "-")
+            linha.set_linewidth(1.3 if pouco else 2.0)
+            linha.set_visible(True)
+            # rótulo na ponta do meridiano do lado do eixo TABO (metade de cima), dentro do mapa
+            rr = min(meia + 0.12, 0.84 * self._k_lim)
+            rot.set_position((rr * ux, rr * uy))
+            rot.set_horizontalalignment("left" if ux > 0.3 else ("right" if ux < -0.3 else "center"))
+            rot.set_verticalalignment("bottom" if uy > 0.3 else ("top" if uy < -0.3 else "center"))
+            rot.set_text(f"{nome} {fmt_eixo(eixo)}")
+            rot.set_visible(True)
+        ax.set_title(f"Potência axial (D) — Ø {d:.1f} mm", fontsize=8.5)
+        self.cv_kmapa.canvas.draw_idle()
+
+    def _k_evento_no_mapa(self, ev) -> bool:
+        """Clique válido para escolher o diâmetro: dentro do mapa, controle ativo e sem zoom/arrasto da barra."""
+        tb = self.cv_kmapa.toolbar
+        return (self._k_ax is not None and ev.inaxes is self._k_ax and ev.xdata is not None and ev.ydata is not None
+                and self.k_slider.isEnabled() and not (tb is not None and tb.mode))
+
+    def _k_diametro_do_evento(self, ev) -> None:
+        dec = int(round(2.0 * math.hypot(ev.xdata, ev.ydata) * 10.0))
+        self.k_slider.setValue(min(max(dec, self.k_slider.minimum()), self.k_slider.maximum()))   # dispara a atualização
+
+    def _k_mapa_press(self, ev) -> None:
+        if ev.button == MouseButton.LEFT and self._k_evento_no_mapa(ev):
+            self._k_arrastando = True
+            self._k_diametro_do_evento(ev)
+
+    def _k_mapa_move(self, ev) -> None:
+        botoes = getattr(ev, "buttons", None)              # matplotlib recente: botões seguros durante o movimento
+        if botoes is not None and MouseButton.LEFT not in botoes:
+            self._k_arrastando = False                     # soltou fora da janela: o arrasto acabou
+        if self._k_arrastando and self._k_evento_no_mapa(ev):
+            self._k_diametro_do_evento(ev)
+
+    def _k_mapa_release(self, _ev) -> None:
+        self._k_arrastando = False
 
     def keratometry_tsv(self) -> str:
         """A tabela da aba Ceratometria como está na tela, em texto separado por tabulação (sem nome)."""

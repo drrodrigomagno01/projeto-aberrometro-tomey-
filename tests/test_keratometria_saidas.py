@@ -195,7 +195,7 @@ def test_report_lines_secao_tabela_conferencia_e_configuracao(exames):
     assert any("Pupila: registrada" in ln and "diâmetro 5.00 mm" in ln for ln in L)
     assert any(ln.startswith("Limites da ceratometria (provisórios)") for ln in L[L.index("## Qualidade e limitações"):])
     prov = L[L.index("## Proveniência"):]
-    assert any(ln.startswith("Ceratometria: {") and "'versao': 'ceratometria_v1'" in ln and "'fonte': 'DIO'" in ln for ln in prov)
+    assert any(ln.startswith("Ceratometria: {") and "'versao': 'ceratometria_v2'" in ln and "'fonte': 'DIO'" in ln for ln in prov)
 
 
 def test_report_lines_sem_pupila_e_acp_zero(exames):
@@ -281,7 +281,7 @@ def test_long_rows_tem_j0_j45_e_nunca_eixo_cru(exames):
     z3 = next(z for z in an.keratometry.zonas if z.diametro_mm == 3.0)
     r3 = met["j0_D@3mm_vertice"]
     assert abs(float(r3["valor"]) - z3.j0_D) <= 1e-6 and abs(float(met["k1_plano_D@3mm_vertice"]["valor"]) - z3.k1_plano_D) <= 1e-6
-    assert r3["exame"] == "90001" and r3["participante"] == an.identity.study_id and r3["perfil"] == "ceratometria_v1"
+    assert r3["exame"] == "90001" and r3["participante"] == an.identity.study_id and r3["perfil"] == "ceratometria_v2"
     assert r3["metodo"] == "TMS_calc" and r3["olho"] == "OD" and r3["analise"] == an.analysis_id
     assert abs(float(met["diametro_pupila_mm"]["valor"]) - an.pupil.diameter) <= 1e-4
     assert abs(math.hypot(float(met["j0_D@pupila"]["valor"]), float(met["j45_D@pupila"]["valor"])) - an.keratometry.pupila.delta_k_D / 2) < 1e-5
@@ -333,6 +333,6 @@ def test_analise_sem_ceratometria_nao_quebra_as_saidas(exames, tmp_path, capsys)
     L = report_lines(velho)
     assert TITULO in L and any("não calculada" in ln for ln in L)
     assert "Ceratometria não calculada" in report_html(ex, velho, with_maps=False)
-    assert not any("@" in r["metrica"] and r["perfil"] == "ceratometria_v1" for r in _long_rows(velho))
+    assert not any("@" in r["metrica"] and r["perfil"] == "ceratometria_v2" for r in _long_rows(velho))
     _print_analysis(velho)
     assert "ceratometria" not in capsys.readouterr().out

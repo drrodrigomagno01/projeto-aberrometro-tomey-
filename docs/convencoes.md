@@ -68,13 +68,18 @@
   as tabelas completas (programa, HTML, relatório, CSV) levam todas as linhas e os 25 anéis.
 - **Anel medido**: valores do próprio anel; diâmetro = 2·média do RAD medido (= 2ª coluna do AVE).
 - **Zona 0–d** (padrão 0–3 e 0–6 mm): área de raio d/2 centrada no vértice, com a mesma regra da zona pupilar (peso
-  r·Δr, Km = média ponderada); equivale às "zonas" de Pentacam/Atlas. Com a pupila centrada no vértice, zona 0–d =
+  de área da célula radial, Km = média ponderada); equivale às "zonas" de Pentacam/Atlas. Com a pupila centrada no vértice, zona 0–d =
   zona pupilar de diâmetro d (ensaio). O peso r é maior nos meridianos planos (anéis mais longe do vértice), então o Km
   por área fica alguns centésimos abaixo da média dos anéis quando há astigmatismo. Um meridiano conta como coberto
   quando os anéis com dados chegam à borda (meio anel de folga) e não há ponto ausente dentro dela; como o RAD do ponto
   ausente vem vazio, a posição dele é estimada pelo anel anterior do mesmo meridiano mais o espaçamento nominal.
-- **Zona pupilar**: amostras com r ≤ raio da borda do PUP no mesmo meridiano, peso r·Δr (Δr do raio nominal do anel);
-  Km = média ponderada (definição do ACP do TMS); K1/K2 = Km ∓ h2 do ajuste ponderado. Pupila de entrada sob a
+- **Zona pupilar**: área dentro da borda do PUP no mesmo meridiano. Cada amostra representa a célula radial
+  [r − Δr/2, r + Δr/2] (Δr = espaçamento nominal do anel) e pesa a área dessa célula dentro da borda: r·Δr quando
+  inteira dentro, só a parte de dentro na amostra da borda (ceratometria_v2, 0.4.1 — antes a amostra entrava inteira
+  se r ≤ borda, e a média dava degraus de até 0,15 D de Ø 2 mm em diante quando um anel entrava pelos meridianos
+  curvos; D27). Km = média
+  ponderada (definição do ACP do TMS: erro médio 0,0045 D nos 9 exames reais com pupila); K1/K2 = Km ∓ h2 do ajuste
+  ponderado. Pupila de entrada sob a
   iluminação do Plácido, na captura — não é pupilometria mesópica/escotópica.
 - **SimK do TMS-4N** (reproduzido): média dos anéis 6–8 (≈ Ø 2,1–2,9 mm, centro em ~2,5 mm) em cada meridiano completo
   (θ e θ+180°); curvo = máximo; plano = meridiano a +90°; MinK = mínimo em qualquer ângulo. **No XREF, SimK1 = curvo.**
@@ -120,6 +125,34 @@
 - **resumo_longo.csv** (`tmsab batch`): `k1_plano_D`, `k2_curvo_D`, `delta_k_D`, `k_medio_D`, `j0_D`, `j45_D` com o sufixo
   `@{d}mm_vertice`, `@zona_0-{d}mm_vertice` ou `@pupila` (`validade@…` quando indisponível), `diametro_pupila_mm`,
   `chord_mu_aparente_mm`, `chord_mu_nasal_mm`, `chord_mu_superior_mm`. Nunca o eixo cru da ceratometria.
+
+## Controle de diâmetro da ceratometria (0.4.1)
+
+- **O que mostra:** para o diâmetro escolhido d, a **circunferência Ø d** (DIO interpolado em r = d/2 em cada
+  meridiano, com o RAD daquele ângulo) e a **zona 0–d** (média pela área), centradas no vértice — as mesmas
+  definições, funções e limites das linhas "Ø d mm" e "zona 0–d mm" da tabela (`ceratometria_no_diametro`), com a
+  configuração e os limites de qualidade da própria análise. Nos diâmetros da tabela os números são idênticos. As
+  duas variam de forma contínua com d (a zona pelo recorte da célula radial na borda, D27). Um meridiano só conta
+  como coberto na zona se tiver ao menos uma amostra com parte da célula dentro da borda.
+  Abaixo de ~1 mm a zona tem só 1–2 anéis: K1/K2/ΔK mudam depressa quando o 2º anel entra (até 0,1 D em ΔK
+  entre décimos vizinhos nos exames reais) e o eixo ali é pouco confiável. Km/K1/K2 das zonas têm viés de
+  ≈ +ΔK²/(8·Km) em relação à média por área exata (Δr médio do anel; ≤ 0,015 D nos exames reais, D27).
+- **Faixa e passo:** de 0,5 mm até o Ø nominal do anel mais externo arredondado para cima (8,7–9,0 mm nos exames
+  reais), em décimos exatos de mm; o diâmetro inicial é 3,0 mm. Na lacuna central do Plácido, fora da cobertura dos
+  anéis ou com setor sem dados, a linha sai indisponível com o motivo (nunca extrapolada, nunca zero).
+- **Desenho:** sobre o mapa de potência axial (DIO), o círculo Ø d (cinza tracejado quando a circunferência está
+  indisponível) e os meridianos **K2 (curvo, laranja)** e **K1 (plano, azul)** nos eixos TABO da circunferência — no
+  referencial do mapa (vista do examinador, x à direita, y para cima) o meridiano a° passa pelo vértice na direção
+  (cos a, sen a) —, tracejados quando o eixo é pouco definido (ΔK < 0,50 D); "+" no vértice; o contorno tracejado fino
+  é a pupila.
+- **Interação:** no programa, controle deslizante (setas: 0,1 mm; PgUp/PgDn: 0,5 mm), caixa numérica ou clique/arraste
+  no mapa (ignorado com o zoom ou o arrasto da barra de ferramentas ativos); a escolha vale para os exames seguintes
+  (limitada à faixa de cada um) e aparece como linha traço-ponto nos "Gráficos por diâmetro". No HTML, o mesmo com o
+  controle deslizante ou o ponteiro (mouse ou toque) sobre o mapa: a grade de diâmetros vem calculada do Python (bloco
+  JSON) e o JavaScript só exibe; o relatório .html salvo reabre no diâmetro mostrado e o controle continua funcionando
+  nele; a impressão leva o mapa com o diâmetro atual e as duas linhas.
+- **O que não muda:** o controle é só visualização — não entra no `analysis_id` nem no JSON, no CSV e no PDF; a tabela,
+  a folha A4 e os relatórios continuam com os diâmetros fixos (D23, D26).
 
 ## Identidade do cálculo
 

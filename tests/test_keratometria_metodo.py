@@ -65,6 +65,25 @@ def test_zona_0_6_mm_e_a_media_por_area_da_potencia_axial(tmp_path):
     assert abs(z6.k_medio_D - ref) < 0.08, (z6.k_medio_D, ref)
 
 
+def test_zona_0_d_continua_com_o_diametro_e_igual_a_media_por_area(tmp_path):
+    # ceratometria_v2: a amostra da borda pesa só a parte da sua célula radial dentro da zona. Com a amostra inteira
+    # (v1), um anel entrava na zona primeiro pelos meridianos curvos: nesta córnea (3 D) Km/K1/K2 davam degraus de
+    # 0,3 D entre décimos vizinhos e se afastavam 0,27 D da média por área (0,15 D nos exames reais)
+    spec = SyntheticSpec(exam_id="S", R=7.0, Q=-0.2, cyl_D=3.0, axis_deg=85.0, eye="OS", decimals=4)
+    d = str(tmp_path / "continua")
+    write_export_folder_v1([spec], d)
+    ex = import_tms_bundle(d, exam_id="90001")
+    ds = [k / 10.0 for k in range(15, 61)]
+    zs = [compute_keratometry(ex, KeratometryConfig(diametros_mm=(), zonas_disco_mm=(x,), aneis_medidos=False,
+                                                    zona_pupilar="nenhuma")).discos[0] for x in ds]
+    assert all(z.validity == "disponivel" for z in zs)
+    v = np.array([[z.k1_plano_D, z.k2_curvo_D, z.k_medio_D, z.delta_k_D] for z in zs])
+    degrau = np.abs(v[1:-1] - 0.5 * (v[:-2] + v[2:])).max(axis=0)
+    assert degrau.max() < 0.02, degrau
+    erro = max(abs(z.k_medio_D - _km_por_area_analitico(spec, x / 2)) for z, x in zip(zs, ds))
+    assert erro < 0.04, erro
+
+
 # ---------------------------------------------------------------------------
 # Conferência SimK × XREF e regra do SimK
 # ---------------------------------------------------------------------------

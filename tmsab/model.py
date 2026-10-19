@@ -259,7 +259,7 @@ class KeratometryConfig:
     aneis_medidos: bool = True                   # uma linha por anel do Plácido, no diâmetro medido (2·RAD médio)
     zona_pupilar: str = "area_contorno_PUP"      # "area_contorno_PUP" | "nenhuma"
     simk_aneis: tuple[int, ...] = (6, 7, 8)      # regra do SimK do TMS-4N (anéis 1-based, ≈ Ø 2,5 mm)
-    versao: str = "ceratometria_v1"
+    versao: str = "ceratometria_v2"              # v2 (0.4.1): zonas e pupila com a célula radial recortada na borda
 
 
 # ---------------------------------------------------------------------------

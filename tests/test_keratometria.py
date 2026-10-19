@@ -166,7 +166,7 @@ def test_zona_pupilar_media_por_area_igual_ao_acp(toricas):
     z = k.pupila
     assert z.validity == "disponivel" and abs(z.diametro_mm - 5.0) < 0.05
     assert z.centro_xy is not None and abs(z.centro_xy[0] - 0.3) < 0.02 and abs(z.centro_xy[1] + 0.2) < 0.02
-    assert abs(z.k_medio_D - k.simk_tms["ACP"]) < 0.011            # ACP do XREF sintético, mesma regra
+    assert abs(z.k_medio_D - k.simk_tms["ACP"]) < 0.011            # ACP do XREF sintético (simulador: regra v1, amostra inteira)
     assert any("ACP" in c for c in k.conferencia)
     assert diferenca_eixo(z.eixo_k1_deg, 30.0) < 1.0 and abs(z.delta_k_D - 2.0) < 0.05
 

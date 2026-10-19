@@ -42,7 +42,10 @@ versões; e, desde a 0.4.0, a ceratometria por zona da potência axial medida pe
     pupilar usa a pupila de **entrada** da captura, sob a iluminação do Plácido (5,8–7,8 mm nos exames reais), não uma
     pupila mesópica/escotópica padronizada; circunferências e anéis são centrados no vértice. Com ΔK < 0,50 D o
     eixo varia entre zonas e capturas (marcado na tabela). A tabela é **dado**, não recomendação: a escolha do K para
-    cálculo de LIO ou para cirurgia refrativa é do cirurgião.
+    cálculo de LIO ou para cirurgia refrativa é do cirurgião. O controle de diâmetro (0.4.1) mostra a mesma
+    ceratometria em qualquer diâmetro, de 0,1 em 0,1 mm: é leitura dos dados, não sugestão de zona. Nas zonas 0–d e
+    na pupila, Km/K1/K2 têm viés de ≈ +ΔK²/(8·Km) em relação à média por área exata (≤ 0,015 D com até 2,4 D de
+    cilindro; ≈ 0,1 D com 6 D, como no ceratocone); ΔK e eixos não são afetados (D27).
 
 12. **Chord mu aparente** (0.4.0): distância do centro da pupila desta captura ao vértice do TMS. Usa a pupila sob a
     iluminação do Plácido (não pupilometria fotópica/mesópica padronizada), depende de boa fixação no alvo e não foi
