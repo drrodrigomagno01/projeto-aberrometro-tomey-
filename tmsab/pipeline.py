@@ -16,9 +16,11 @@ import numpy as np
 
 from . import CORE_VERSION
 from .geometry import ReconstructedSurface, reconstruct_surface, support_metrics
+from .keratometry import compute_keratometry
 from .model import (
     Analysis,
     GeometrySummary,
+    KeratometryConfig,
     NormalizedExam,
     OpticalProfile,
     QualityConfig,
@@ -136,7 +138,8 @@ class Cancelled(Exception):
 
 def analyze_exam(exam: NormalizedExam, profiles: Optional[list[OpticalProfile]] = None,
                  recon: Optional[ReconstructionConfig] = None, qc: Optional[QualityConfig] = None,
-                 with_maps: bool = True, progress=None, should_cancel=None) -> tuple[Analysis, ReconstructedSurface]:
+                 with_maps: bool = True, progress=None, should_cancel=None,
+                 kcfg: Optional[KeratometryConfig] = None) -> tuple[Analysis, ReconstructedSurface]:
     """Executa a cadeia completa para um exame normalizado.
 
     progress(msg) é chamado a cada etapa; should_cancel() é consultado entre etapas e, se verdadeiro,
@@ -145,6 +148,7 @@ def analyze_exam(exam: NormalizedExam, profiles: Optional[list[OpticalProfile]] 
     profiles = profiles or default_profiles()
     recon = recon or ReconstructionConfig()
     qc = qc or QualityConfig()
+    kcfg = kcfg or KeratometryConfig()
 
     def _p(msg: str):
         if progress:
@@ -165,6 +169,9 @@ def analyze_exam(exam: NormalizedExam, profiles: Optional[list[OpticalProfile]] 
         _p(f"perfil {i} de {len(profiles)}: {p.name}")
         results.append(compute_profile(exam, rec, p, qc, with_maps=with_maps))
     _c()
+    _p("ceratometria por zona")
+    kres = compute_keratometry(exam, kcfg, qc)
+    _c()
     _p("montagem do resultado")
     versions = {"nucleo": CORE_VERSION, "adaptador": f"{exam.bundle.adapter_profile}@{exam.bundle.adapter_version}", "numpy": np.__version__}
     import scipy
@@ -172,12 +179,13 @@ def analyze_exam(exam: NormalizedExam, profiles: Optional[list[OpticalProfile]] 
     payload = {
         "hashes": exam.bundle.hashes(), "recon": dataclasses.asdict(recon), "qc": dataclasses.asdict(qc),
         "profiles": [dataclasses.asdict(p) for p in profiles], "versions": versions,
-        "frame": dataclasses.asdict(exam.frame),
+        "frame": dataclasses.asdict(exam.frame), "keratometry": dataclasses.asdict(kcfg),
     }
     analysis = Analysis(
         analysis_id=stable_hash(payload)[:24], created_at=now_iso(), versions=versions, identity=exam.identity,
         device=exam.device, frame=exam.frame, bundle_hashes=exam.bundle.hashes(), synthetic=exam.bundle.synthetic,
         reconstruction=recon, geometry=summarize_geometry(rec, recon), pupil=exam.pupil, wavefronts=results,
         quality_config=qc, import_diagnostics=list(exam.diagnostics) + diag, warnings=list(exam.warnings),
+        keratometry=kres,
     )
     return analysis, rec

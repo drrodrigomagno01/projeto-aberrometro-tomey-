@@ -61,7 +61,7 @@ class AnalysisWorker(QThread):
             except Exception as e:  # noqa: BLE001 — nunca derrubar a thread
                 self.package_failed.emit(key, f"erro inesperado na importação: {type(e).__name__}: {e}")
                 continue
-            steps = len(self.profiles) + 3
+            steps = len(self.profiles) + 4      # validação, reconstrução, perfis, ceratometria, montagem
             counter = {"k": 0}
 
             def _progress(msg: str, _base=base, _span=span, _label=label):

@@ -24,7 +24,7 @@ def export_dir(tmp_path_factory):
 def test_list_folder(export_dir):
     r = list_folder(export_dir)
     assert [e["exam_id"] for e in r["exams"]] == ["90001", "90002"]
-    assert r["exams"][0]["simk"]["CYL"] == 2.0 and r["patients"] and r["warnings"] == []
+    assert abs(r["exams"][0]["simk"]["CYL"] - 2.0) < 0.05 and r["patients"] and r["warnings"] == []
     assert "SINTETICO" not in json.dumps(r)
 
 

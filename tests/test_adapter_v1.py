@@ -40,7 +40,8 @@ def test_xref_never_exposes_names(export_v1):
     for v in x.values():
         assert "Last Name" not in v["indices"] and "First Name" not in v["indices"] and "ID" not in v["indices"]
         assert "SINTETICO" not in json.dumps(v)
-    assert x["90001"]["eye"] == "OD" and abs(x["90001"]["indices"]["CYL"] - 2.0) < 1e-9
+    # SimK/CYL do XREF sintético saem da regra do TMS sobre o DIO axial (anéis 6–8), não de valores fixos
+    assert x["90001"]["eye"] == "OD" and abs(x["90001"]["indices"]["CYL"] - 2.0) < 0.05
 
 
 def test_multi_exam_folder_requires_selection(export_v1):
@@ -61,7 +62,9 @@ def test_import_real_format_structure(export_v1):
     assert ex.pupil.state == "registrada"
     assert abs(ex.pupil.center_x - 0.3) < 0.01 and abs(ex.pupil.center_y + 0.2) < 0.01 and abs(ex.pupil.diameter - 4.0) < 0.02
     assert "XREF" in {f.role for f in ex.bundle.files} and "AVE" in {f.role for f in ex.bundle.files}
-    assert ex.bundle.export_settings["tms_indices"]["SimK1"] == 44.70
+    idx = ex.bundle.export_settings["tms_indices"]
+    assert idx["SimK1"] > idx["SimK2"]                              # no TMS, SimK1 é o meridiano CURVO
+    assert abs(idx["SimK1"] - (337.5 / 7.8 + 1.0)) < 0.3 and abs(idx["SimK1"] - idx["SimK2"] - idx["CYL"]) < 0.011
     assert ex.frame.transform_verified is True
 
 
