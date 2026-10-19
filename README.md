@@ -60,6 +60,11 @@ onda + tabelas) ou *Imprimir relatório detalhado*, *Salvar relatório (.html)*,
 verificado a 12 casas decimais). Pastas com subpastas (uma por exportação) e pastas com dois pacientes são tratadas
 como no programa.
 
+**Publicada em https://aberrometria-tms.vercel.app** (Vercel, projeto `aberrometria-tms`): a mesma página, servida por
+HTTPS. O servidor só entrega o arquivo; a pasta do TMS continua sendo lida e calculada no navegador. Para publicar uma
+versão nova, depois que o CI do commit passar: `web/publish_vercel.sh` (baixa o HTML gerado pelo CI, envia só a página
+e confere o sha256 servido).
+
 **Opção C — rodar do código-fonte (qualquer sistema):**
 
 ```bash

@@ -11,3 +11,4 @@ out_ci/
 examples/*/
 !examples/README.md
 dist_html/
+dist_vercel/
