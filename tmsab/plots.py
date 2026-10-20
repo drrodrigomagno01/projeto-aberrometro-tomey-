@@ -600,26 +600,30 @@ def figure_resultado_completo(exam: NormalizedExam, analysis: Analysis, fig: Opt
 
     # ---- linha 1: mapa axial no estilo do TMS (grande: escala Standard, transferidor, meridianos, zonas, pupila)
     #              + 2×2 pequenos (tangencial, refrativa, elevação, frente de onda do diâmetro pupilar escolhido)
-    from .topo import ViewOptions, draw_tms_legend, draw_tms_map, select_profile
+    from .topo import ViewOptions, draw_tms_legend, draw_tms_map, escala_do_mapa, select_profile, titulo_da_escala
     vo = view or ViewOptions()
     y1, w1 = 0.622, 0.37
     h1 = w1 * fw / fh
     axb = fig.add_axes([XL, y1, w1, h1])
-    big = ViewOptions(kind="axial", scale=vo.scale, zone_mm=vo.zone_mm, pupil_mm=vo.pupil_mm, center=vo.center, annotate=True, protractor=True)
+    big = ViewOptions(kind="axial", scale=vo.scale, step=vo.step, zone_mm=vo.zone_mm, pupil_mm=vo.pupil_mm, center=vo.center,
+                      annotate=True, protractor=True)
     pm_big, levels_big, _ = draw_tms_map(axb, exam, analysis, big, title=False, fontsize=6.0)
+    cortada_big = escala_do_mapa(exam, big)[1]
     axl = fig.add_axes([XL + 0.005, y1 - 0.026, w1 - 0.01, 0.020])
     if pm_big is not None:
-        draw_tms_legend(axl, levels_big, big.scale, "D", fontsize=4.4)
+        draw_tms_legend(axl, levels_big, big.scale, "D", fontsize=4.4, cortada=cortada_big)
     else:
         axl.set_axis_off()
-    _texto_cabendo(fig, XL, y1 + h1 + 0.017, "TOPOGRAFIA — potência axial, escala " + ("Standard do TMS (40,5–53,0 D)" if big.scale == "tms" else "ajustada ao exame")
+    _texto_cabendo(fig, XL, y1 + h1 + 0.017, "TOPOGRAFIA — potência axial, escala "
+                   + ("Standard do TMS (40,5–53,0 D)" if big.scale == "tms" else titulo_da_escala(big.scale, big.step))
                    + (f", zona {big.zone_mm:g} mm" if big.zone_mm else "") + "; meridianos íngreme/plano e potências a 3/5/7 mm; pupila tracejada",
                    6.3, larg_pt, weight="bold", color="#333", va="top")
     sw = 0.165; sh = sw * fw / fh
     grid = [("tangencial", 0.50, y1 + h1 - sh - 0.018), ("refrativa", 0.745, y1 + h1 - sh - 0.018), ("elevacao", 0.50, y1 - 0.004), ("frente_onda", 0.745, y1 - 0.004)]
     for kind, x, y in grid:
         ax = fig.add_axes([x, y, sw, sh])
-        o_ = ViewOptions(kind=kind, scale=vo.scale, zone_mm=vo.zone_mm, pupil_mm=vo.pupil_mm, center=vo.center, annotate=False, protractor=False)
+        o_ = ViewOptions(kind=kind, scale=vo.scale, step=vo.step, zone_mm=vo.zone_mm, pupil_mm=vo.pupil_mm, center=vo.center,
+                         annotate=False, protractor=False)
         pm, lv, _ = draw_tms_map(ax, exam, analysis, o_, title=True, fontsize=5.4)
         if pm is not None:
             cax = fig.add_axes([x + sw + 0.004, y + 0.01, 0.008, sh - 0.02])

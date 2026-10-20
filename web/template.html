@@ -364,7 +364,7 @@ function onResult(m) {
   next();
 }
 // ----------------------------------------------------------------------------- topografia interativa (filtros)
-const VIEW_DEFAULTS = { kind: "axial", scale: "tms", zone_mm: null, pupil_mm: null, center: "vertice" };
+const VIEW_DEFAULTS = { kind: "axial", scale: "tms", step: 0.5, escala: "tms", zone_mm: null, pupil_mm: null, center: "vertice" };
 const panels = {};
 function seg(label, options, state, prop, onChange) {
   const wrap = document.createElement("div"); wrap.className = "seg";
@@ -385,7 +385,10 @@ function buildTopoPanel(art, key, dir, res, r) {
   const controls = document.createElement("div"); controls.className = "controls";
   const refresh = () => { setStatus("desenhando " + state.kind + "…"); engineSend({ type: "topo", key, base, exam: r.exam_id, view: state }); };
   controls.appendChild(seg("Mapa", [["Axial", "axial"], ["Tangencial", "tangencial"], ["Refrativa", "refrativa"], ["Elevação", "elevacao"], ["Frente de onda", "frente_onda"], ["Alta ordem", "alta_ordem"]], state, "kind", refresh));
-  controls.appendChild(seg("Escala", [["Standard TMS (40,5–53 D)", "tms"], ["Ajustada ao exame", "auto"]], state, "scale", refresh));
+  // escala de cores: a Standard do TMS (fixa, passo 0,5 D) ou a ajustada ao exame no passo do botão — um só grupo
+  controls.appendChild(seg("Escala de cores", [["Standard TMS (40,5–53, passo 0,5)", "tms"], ["ajustada: 0,125", "auto:0.125"], ["0,25", "auto:0.25"],
+    ["0,5", "auto:0.5"], ["0,75", "auto:0.75"], ["1,00 D", "auto:1"]], state, "escala", () => {
+    const [sc, st] = state.escala.split(":"); state.scale = sc; state.step = st ? parseFloat(st) : 0.5; refresh(); }));
   controls.appendChild(seg("Zona", [["tudo", null], ["3 mm", 3], ["5 mm", 5], ["7 mm", 7]], state, "zone_mm", refresh));
   controls.appendChild(seg("Diâmetro pupilar", [["medida (PUP)", null], ["3 mm", 3], ["4 mm", 4], ["5 mm", 5], ["6 mm", 6]], state, "pupil_mm", refresh));
   controls.appendChild(seg("Centro (frente de onda)", [["vértice", "vertice"], ["pupila", "pupila"]], state, "center", refresh));
@@ -412,6 +415,8 @@ function onTopo(m) {
   if (r.error) { p.info.textContent = "erro: " + r.error; setStatus("erro na visualização: " + r.error, "err"); return; }
   p.img.src = r.png;
   const lines = [];
+  if (r.escala) lines.push("Escala " + r.escala.titulo + ": " + fmt(r.escala.de, 3).replace(/0+$/, "").replace(/\.$/, ".0") + " a " +
+    fmt(r.escala.ate, 3).replace(/0+$/, "").replace(/\.$/, ".0") + " D (" + r.escala.faixas + " faixas)", "");
   for (const z of r.stats || []) {
     if (z.steep_deg == null) { lines.push(z.zone_mm.toFixed(1) + " mm: sem cobertura"); continue; }
     lines.push(z.zone_mm.toFixed(1) + " mm: íngreme " + fmt(z.steep_deg, 0) + "° (" + fmt(z.steep_power, 2) + " D)  plano " + fmt(z.flat_deg, 0) + "° (" + fmt(z.flat_power, 2) + " D)  cil. " + fmt(z.steep_power - z.flat_power, 2) + " D");

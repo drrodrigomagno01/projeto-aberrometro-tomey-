@@ -9,7 +9,7 @@ modelo óptico e às versões usadas, com controle de qualidade e proveniência.
 
 Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/2026): seções 1–15 e apêndices.
 
-> **Estado: versão de pesquisa 0.4.1.** O formato real das Data Tables do TMS-4N foi verificado com exames
+> **Estado: versão de pesquisa 0.4.2.** O formato real das Data Tables do TMS-4N foi verificado com exames
 > reais de 3 pacientes (perfil `tms4_datatables_v1`; orientação angular confirmada com astigmatismo de até 2,5 D;
 > marcos G0/G1 fechados — `docs/G0_resultado.md`). Nada aqui é alegação
 > diagnóstica, seleção de LIO ou planejamento terapêutico. Ver `docs/limitacoes.md`.
@@ -24,8 +24,8 @@ Implementa o *Plano de Desenvolvimento — Aberrometria Tomey TMS* (v1.0, 17/10/
 | §6 Núcleo Python + CLI + programa desktop (Qt) + empacotamento Windows/macOS + versão HTML (Pyodide) | Implementado |
 | §7 Interface e relatório (JSON, CSV, PDF derivados do mesmo objeto; três estados por perfil) + **página "Resultado completo"** (topografia axial/tangencial/refrativa/elevação + frente de onda + Zernike + tabelas, 1 folha A4) | Implementado |
 | **Ceratometria por zona** (0.4.0): K1 plano, K2 curvo e eixos em Ø 1–8 mm (e 2,4/3,3 mm), zonas 0–3 e 0–6 mm, zona pupilar e os 25 anéis, da potência axial medida pelo TMS; SimK e ACP do TMS recalculados e conferidos a cada exame; alerta de astigmatismo dependente da zona; **controle de diâmetro** (0.4.1): no programa e no site, um controle deslizante ou um clique no mapa axial escolhe o diâmetro (0,5 mm até o último anel, passo de 0,1 mm) e mostra o círculo, os meridianos K1/K2 e K1/K2/eixos/ΔK/Km da circunferência Ø d e da zona 0–d | Implementado e **conferido com 10 exames reais** (SimK a ≤ 0,01 D em 9 de 10 exames e 0,03 D no 10º (27204); Km da zona pupilar × ACP: erro médio 0,0045 D (máx. 0,013) nos 9 com pupila detectada) — `docs/convencoes.md`, D23, D26, D27 |
-| **Topografia no estilo do TMS** (0.4.0): escala Standard 40,5–53,0 D (paleta do aparelho), transferidor, meridianos íngreme/plano com as potências a 3/5/7 mm (*Astig Stats*), pupila; **botões de visualização** (mapa, escala, zona, diâmetro pupilar 3/4/5/6 mm ou medido, centro) no programa e no HTML | Implementado — D24/D25 |
-| §8 Suíte de verificação (230 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, ceratometria, topografia, saídas) | Implementado — `pytest` |
+| **Topografia no estilo do TMS** (0.4.0): escala Standard 40,5–53,0 D (paleta do aparelho), transferidor, meridianos íngreme/plano com as potências a 3/5/7 mm (*Astig Stats*), pupila; **botões de visualização** (mapa, escala — Standard ou ajustada ao exame com passo de 0,125/0,25/0,5/0,75/1,00 D (0.4.2) —, zona, diâmetro pupilar 3/4/5/6 mm ou medido, centro) no programa e no HTML | Implementado — D24/D25/D28 |
+| §8 Suíte de verificação (266 testes: léxico, Angle/Ring, pareamento, sinais, orientação, geometria, Zernike, traçado, convergência, lacunas, ceratometria, topografia, saídas) | Implementado — `pytest` |
 | §9 Estatística do piloto (repetibilidade, Bland–Altman com observações repetidas) + protocolo | Implementado (`tmsab stats`) |
 | §0 Inventário da estação / G0–G1 | **Fechados em 18/10/2026** com 14 exames reais de 3 pacientes — `docs/G0_resultado.md` (pendentes: tela "Sobre", olho de calibração, comparador) |
 | §9 Piloto com participantes e comparador | **Depende de dados reais** — `docs/protocolo_piloto.md` |
@@ -96,7 +96,8 @@ pytest                    # suíte de verificação
    dos perfis (3/4/5/6 mm e pupila medida, centro no vértice e na pupila) e os índices do TMS —
    **Imprimir resultado completo…** manda direto para a impressora; a mesma página é a 1ª do PDF em `analises/`.
 4. A aba **Topografia (TMS)** tem os **botões de visualização**: mapa (axial, tangencial, refrativa, elevação, frente
-   de onda, alta ordem), escala (Standard do TMS ou ajustada ao exame), zona (tudo, 3, 5, 7 mm), **diâmetro pupilar**
+   de onda, alta ordem), **escala de cores** (Standard do TMS, fixa em 0,5 D, ou ajustada ao exame com passo de
+   **0,125 · 0,25 · 0,5 · 0,75 · 1,00 D**, num clique), zona (tudo, 3, 5, 7 mm), **diâmetro pupilar**
    (medido pelo TMS, 3, 4, 5, 6 mm) e centro (vértice/pupila). Os filtros valem também para a página de resultado
    completo e para a impressão. As demais abas detalham: *Ceratometria* (K1 plano, K2 curvo e eixos em todos os diâmetros, zonas 0–3/0–6 mm,
    pupila, SimK do TMS e os 25 anéis, com *Copiar tabela (TSV)*; à direita, o **mapa axial com o controle de
@@ -124,7 +125,7 @@ sintéticos (perfil v0) — e `tmsab.synthetic.write_export_folder_v1` gera past
 
 ```bash
 tmsab verify          # oval de Descartes (W≡0), esfera vs Seidel, traçado 3D vs referência meridional, sintéticos
-pytest -q             # 230 ensaios (matriz da §8 em docs/validacao.md + formato real + ceratometria + topografia)
+pytest -q             # 266 ensaios (matriz da §8 em docs/validacao.md + formato real + ceratometria + topografia)
 ```
 
 Resultados registrados: esfera R=7,8 mm → c(4,0)=+0,0204 µm a 3 mm (Seidel +0,0197); elipsoide Q=−1/n² →

@@ -1,10 +1,12 @@
 """Topografia no estilo do TMS (Tomey): mapa de potência com a escala "Standard" (40,5–53,0 D, passos de 0,5 D e a
-paleta do aparelho), transferidor angular, meridianos íngreme/plano com as potências nas zonas de 3/5/7 mm, caixa
-"Astig Stats / Power Axis", pupila (medida ou diâmetro escolhido) e filtros de visualização (tipo de mapa, escala,
-zona, diâmetro pupilar). Os valores vêm das tabelas exportadas (DIO/ROC/POW/HIT) — nada é recalculado.
+paleta do aparelho) ou ajustada ao exame no passo escolhido (0,125 a 1,00 D), transferidor angular, meridianos
+íngreme/plano com as potências nas zonas de 3/5/7 mm, caixa "Astig Stats / Power Axis", pupila (medida ou diâmetro
+escolhido) e filtros de visualização (tipo de mapa, escala, zona, diâmetro pupilar). Os valores vêm das tabelas
+exportadas (DIO/ROC/POW/HIT) — nada é recalculado.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -24,6 +26,10 @@ TMS_STANDARD_COLORS = [
 TMS_STANDARD_LEVELS = np.round(np.arange(40.5, 53.5 + 0.25, 0.5), 2)       # 27 limites: faixa i = [L_i, L_i+0,5); rótulo = L_i
 TMS_CMAP = matplotlib.colors.ListedColormap(TMS_STANDARD_COLORS, name="tms_standard")
 TMS_NORM = matplotlib.colors.BoundaryNorm(TMS_STANDARD_LEVELS, TMS_CMAP.N, clip=True)
+# escala ajustada ao exame: passos (D) dos botões e número de faixas — no mínimo 8 (4 D com 0,5 D, como antes), no
+# máximo as 26 cores da paleta; além disso a janela de 26 faixas fica centrada na mediana do exame
+PASSOS_ESCALA_D = (0.125, 0.25, 0.5, 0.75, 1.0)
+FAIXAS_AJUSTADA_MIN, FAIXAS_AJUSTADA_MAX = 8, len(TMS_STANDARD_COLORS)
 
 MAP_KINDS = {
     "axial": ("DIO", "Potência axial", "D"),
@@ -42,7 +48,8 @@ ZONES_MM = (3.0, 5.0, 7.0)
 class ViewOptions:
     """Filtros de visualização (os "botões")."""
     kind: str = "axial"                 # axial | tangencial | refrativa | elevacao | frente_onda | alta_ordem
-    scale: str = "tms"                  # tms (Standard 40,5–53 D) | auto (ajustada ao exame, passos de 0,5 D)
+    scale: str = "tms"                  # tms (Standard 40,5–53 D, sempre 0,5 D) | auto (ajustada ao exame, no passo `step`)
+    step: float = 0.5                   # passo da escala ajustada (D): um de PASSOS_ESCALA_D
     zone_mm: Optional[float] = None     # limitar o mapa a um diâmetro (3/5/7/9 mm); None = tudo
     pupil_mm: Optional[float] = None    # diâmetro pupilar a desenhar/usar; None = pupila medida (PUP)
     center: str = "vertice"             # centro do perfil de frente de onda: vertice | pupila
@@ -145,16 +152,66 @@ def _grid_closed(s, values: np.ndarray, fill_center: bool = True):
     return X, Y, np.ma.masked_invalid(V)
 
 
-def _auto_norm(v: np.ndarray, step: float = 0.5, min_span: float = 4.0):
+def passo_valido(step) -> float:
+    """O passo pedido, se for um dos botões (PASSOS_ESCALA_D); senão 0,5 D."""
+    try:
+        s = float(step)
+    except (TypeError, ValueError):
+        return 0.5
+    return next((p for p in PASSOS_ESCALA_D if abs(p - s) < 1e-9), 0.5)
+
+
+def escala_ajustada(v: np.ndarray, step: float = 0.5) -> tuple[np.ndarray, bool]:
+    """Limites das faixas da escala ajustada ao exame e se ela corta os extremos.
+
+    Faixas de `step` D em múltiplos exatos do passo, do percentil 1 ao 99 dos valores; no mínimo 8 faixas (centradas
+    nos dados) e no máximo 26 (as cores da paleta do TMS). Quando seriam necessárias mais de 26 (passo fino ou exame
+    com muita variação, como no ceratocone), a janela de 26 faixas fica centrada na mediana e os valores fora dela saem
+    nas cores das pontas (`cortada` = True)."""
+    s = passo_valido(step)
     ok = np.isfinite(v)
     if not ok.any():
-        return matplotlib.colors.Normalize(0, 1), np.array([0, 1])
-    lo, hi = np.nanpercentile(v[ok], 1), np.nanpercentile(v[ok], 99)
-    if hi - lo < min_span:
-        c = 0.5 * (lo + hi); lo, hi = c - min_span / 2, c + min_span / 2
-    lo, hi = np.floor(lo / step) * step, np.ceil(hi / step) * step
-    levels = np.arange(lo, hi + step / 2, step)
-    return matplotlib.colors.BoundaryNorm(levels, TMS_CMAP.N, clip=True), levels
+        return np.round(np.arange(FAIXAS_AJUSTADA_MIN + 1) * s, 6), False
+    p1, p99 = np.nanpercentile(v[ok], [1, 99])
+    k0, k1 = math.floor(p1 / s + 1e-9), math.ceil(p99 / s - 1e-9)
+    n, cortada = max(k1 - k0, 1), False
+    if n < FAIXAS_AJUSTADA_MIN:
+        k0 -= (FAIXAS_AJUSTADA_MIN - n) // 2
+        n = FAIXAS_AJUSTADA_MIN
+    elif n > FAIXAS_AJUSTADA_MAX:
+        k0 = int(round(float(np.nanmedian(v[ok])) / s - FAIXAS_AJUSTADA_MAX / 2))
+        n, cortada = FAIXAS_AJUSTADA_MAX, True
+    return np.round((k0 + np.arange(n + 1)) * s, 6), cortada
+
+
+def _valores_do_mapa(exam: NormalizedExam, o: ViewOptions) -> Optional[np.ndarray]:
+    """Valores de potência (D) que o mapa mostra (tabela do tipo de mapa, só os utilizáveis, recortados à zona)."""
+    if o.kind not in ("axial", "tangencial", "refrativa"):
+        return None
+    s = exam.samples
+    ft = s.fields.get(MAP_KINDS[o.kind][0])
+    vals = np.where(ft.usable_mask(), ft.values, np.nan) if ft is not None else np.full_like(s.r, np.nan)
+    if o.zone_mm:
+        vals = np.where(s.r <= o.zone_mm / 2.0 + 1e-9, vals, np.nan)
+    return vals
+
+
+def escala_do_mapa(exam: NormalizedExam, opts: Optional[ViewOptions] = None) -> tuple[Optional[np.ndarray], bool]:
+    """(limites das faixas, cortada) da escala de cores de um mapa de potência — a Standard do TMS (fixa) ou a ajustada
+    ao exame no passo escolhido; (None, False) para elevação e frente de onda (escala contínua)."""
+    o = opts or ViewOptions()
+    vals = _valores_do_mapa(exam, o)
+    if vals is None:
+        return None, False
+    if o.scale == "tms":
+        return TMS_STANDARD_LEVELS, False
+    return escala_ajustada(vals, o.step)
+
+
+def norma_da_escala(levels: np.ndarray) -> matplotlib.colors.BoundaryNorm:
+    """Faixa → cor: com 26 faixas, uma cor da paleta por faixa; com menos, as cores espalhadas pela paleta inteira
+    (a mesma conta no mapa e na legenda)."""
+    return TMS_NORM if levels is TMS_STANDARD_LEVELS else matplotlib.colors.BoundaryNorm(levels, TMS_CMAP.N, clip=True)
 
 
 def _protractor(ax: Axes, R: float, fontsize: float = 6.5):
@@ -181,16 +238,10 @@ def draw_tms_map(ax: Axes, exam: NormalizedExam, analysis: Optional[Analysis] = 
     pm, levels, stats = None, None, []
 
     if kind in ("axial", "tangencial", "refrativa"):
-        ft = s.fields.get(role)
-        vals = np.where(ft.usable_mask(), ft.values, np.nan) if ft is not None else np.full_like(s.r, np.nan)
-        if o.zone_mm:
-            vals = np.where(s.r <= o.zone_mm / 2.0 + 1e-9, vals, np.nan)
+        vals = _valores_do_mapa(exam, ViewOptions(kind=kind, zone_mm=o.zone_mm))
         X, Y, V = _grid_closed(s, vals)
-        if o.scale == "tms":
-            norm, levels = TMS_NORM, TMS_STANDARD_LEVELS
-        else:
-            norm, levels = _auto_norm(vals)
-        pm = ax.pcolormesh(X, Y, V, cmap=TMS_CMAP, norm=norm, shading="gouraud", rasterized=True)
+        levels, _ = escala_do_mapa(exam, ViewOptions(kind=kind, scale=o.scale, step=o.step, zone_mm=o.zone_mm))
+        pm = ax.pcolormesh(X, Y, V, cmap=TMS_CMAP, norm=norma_da_escala(levels), shading="gouraud", rasterized=True)
     elif kind == "elevacao":
         from .plots import best_fit_sphere
         usable = (s.point_state == PointState.MEASURED) | (s.point_state == PointState.INTERPOLATED)
@@ -292,20 +343,55 @@ def _draw_pupil_box(ax: Axes, exam: NormalizedExam, pd: Optional[float], cx: flo
             bbox=dict(boxstyle="square,pad=0.3", fc="white", ec="#333"))
 
 
-def draw_tms_legend(ax: Axes, levels: np.ndarray, scale: str = "tms", unit: str = "D", fontsize: float = 5.5):
-    """Barra de cores horizontal com uma caixa por faixa e os limites escritos, como na impressão do TMS."""
+def fmt_passo(step: float) -> str:
+    """Passo da escala como nos botões: 0,125 · 0,25 · 0,5 · 0,75 · 1,00."""
+    s = passo_valido(step)
+    return "1,00" if s == 1.0 else f"{s:g}".replace(".", ",")
+
+
+def titulo_da_escala(scale: str, step: float = 0.5, cortada: bool = False) -> str:
+    """Nome da escala para legendas e cabeçalhos ("Standard do TMS" ou "ajustada ao exame, passo 0,25 D")."""
+    if scale == "tms":
+        return "Standard do TMS"
+    return f"ajustada ao exame, passo {fmt_passo(step)} D" + (" (extremos nas cores das pontas)" if cortada else "")
+
+
+def draw_tms_legend(ax: Axes, levels: np.ndarray, scale: str = "tms", unit: str = "D", fontsize: float = 5.5,
+                    cortada: bool = False):
+    """Barra de cores horizontal com uma caixa por faixa e os limites escritos, como na impressão do TMS. As cores vêm
+    da mesma norma do mapa (norma_da_escala); os rótulos têm as casas do passo (0,125 → 3) e, quando não cabem lado a
+    lado, saem em faixas alternadas."""
     ax.set_axis_off()
     if levels is None:
         return
     n = len(levels) - 1
     if n <= 0:
         return
+    norm = norma_da_escala(levels)
+
+    def casas(vals) -> int:            # as casas que os valores pedem (0,125 → 3), no mínimo 1, como no TMS
+        return max(1, max(len(f"{v:.3f}".rstrip("0").split(".")[1]) for v in vals))
+
+    from .plots import _largura_pt     # largura medida pela fonte (FreeType): programa, PDF e site quebram igual
+
+    pos = ax.get_position()
+    caixa_pt = pos.width * ax.figure.get_figwidth() * 72.0 / max(n + 0.6, 1)
+    passo_rot = 1
+    while True:                        # casas e largura só dos rótulos que aparecem; ≥ 1,2 pt entre vizinhos
+        c = casas(levels[:-1:passo_rot])   # (alternados de 0,125 podem cair em 0,25 e pedir só 2 casas)
+        larg_pt = max(_largura_pt(f"{v:.{c}f}", fontsize) for v in levels[:-1:passo_rot])
+        if larg_pt + 1.2 <= passo_rot * caixa_pt or passo_rot >= n:
+            break
+        passo_rot += 1
+    rotulos = [f"{v:.{c}f}" for v in levels[:-1]]
     for i in range(n):
-        color = TMS_CMAP(i) if scale == "tms" else TMS_CMAP(int(round(i * (TMS_CMAP.N - 1) / max(n - 1, 1))))
+        color = TMS_CMAP(int(norm(0.5 * (levels[i] + levels[i + 1]))))
         ax.add_patch(matplotlib.patches.Rectangle((i, 0), 0.94, 1, color=color))
-        ax.text(i + 0.47, -0.35, f"{levels[i]:.1f}", fontsize=fontsize, ha="center", va="top")   # rótulo = limite inferior, como no TMS
+        if i % passo_rot == 0:
+            ax.text(i + 0.47, -0.35, rotulos[i], fontsize=fontsize, ha="center", va="top")   # rótulo = limite inferior, como no TMS
     ax.set_xlim(-0.3, n + 0.3); ax.set_ylim(-1.3, 1.2)
-    ax.text(n / 2, 1.1, f"escala {'Standard do TMS' if scale == 'tms' else 'ajustada ao exame'} ({unit})", fontsize=fontsize + 0.5, ha="center", va="bottom")
+    step = float(levels[1] - levels[0])
+    ax.text(n / 2, 1.1, f"escala {titulo_da_escala(scale, step, cortada)} ({unit})", fontsize=fontsize + 0.5, ha="center", va="bottom")
 
 
 def select_profile(analysis: Analysis, o: ViewOptions) -> Optional[WavefrontResult]:
@@ -355,7 +441,7 @@ def figure_tms_view(exam: NormalizedExam, analysis: Optional[Analysis], opts: Op
     axl = fig.add_axes([0.05, 0.035, 0.9, 0.09])
     unit = MAP_KINDS.get(o.kind, MAP_KINDS["axial"])[2]
     if pm is not None and o.kind in ("axial", "tangencial", "refrativa"):
-        draw_tms_legend(axl, levels, o.scale, unit, fontsize=6)
+        draw_tms_legend(axl, levels, o.scale, unit, fontsize=6, cortada=escala_do_mapa(exam, o)[1])
     elif pm is not None:
         axl.set_axis_off()
         cb = fig.colorbar(pm, cax=fig.add_axes([0.2, 0.07, 0.6, 0.03]), orientation="horizontal")

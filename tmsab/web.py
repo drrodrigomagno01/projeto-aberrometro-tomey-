@@ -688,9 +688,12 @@ def _finite(obj: Any) -> Any:
 
 
 def _view_from(view: Optional[dict[str, Any]]):
-    from .topo import ViewOptions
+    from .topo import ViewOptions, passo_valido
     v = dict(view or {})
-    return ViewOptions(kind=str(v.get("kind", "axial")), scale=str(v.get("scale", "tms")),
+    if v.get("escala"):                # botão "Escala de cores" do painel: "tms" ou "auto:<passo>"
+        escala, _, passo = str(v["escala"]).partition(":")
+        v["scale"], v["step"] = escala, (passo or 0.5)
+    return ViewOptions(kind=str(v.get("kind", "axial")), scale=str(v.get("scale", "tms")), step=passo_valido(v.get("step", 0.5)),
                        zone_mm=(float(v["zone_mm"]) if v.get("zone_mm") else None),
                        pupil_mm=(float(v["pupil_mm"]) if v.get("pupil_mm") else None),
                        center=str(v.get("center", "vertice")))
@@ -698,7 +701,7 @@ def _view_from(view: Optional[dict[str, Any]]):
 
 def topo_png(directory: str, exam_id: Optional[str], view: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Uma visualização no estilo do TMS (os "botões": mapa, escala, zona, diâmetro pupilar, centro) → PNG + Astig Stats."""
-    from .topo import ZONES_MM, figure_tms_view, select_profile, zone_axis_stats
+    from .topo import ZONES_MM, escala_do_mapa, figure_tms_view, select_profile, titulo_da_escala, zone_axis_stats
     key = (os.path.abspath(directory), str(exam_id or ""))
     if key in _CACHE:
         exam, an = _CACHE[key]
@@ -725,7 +728,11 @@ def topo_png(directory: str, exam_id: Optional[str], view: Optional[dict[str, An
             prof = {"name": wf.profile.name, "diameter_mm": wf.profile.diameter_mm, "center": wf.profile.center_mode,
                     "sa_c40": m.get("sa_c40"), "coma": m.get("coma_magnitude"), "trefoil": m.get("trefoil_magnitude"),
                     "rms_hoa": m.get("rms_hoa_n3plus"), "cyl_D": m.get("cilindro_equivalente_D"), "axis_deg": m.get("eixo_equivalente_deg")}
-    return _finite({"png": _png(fig, dpi=120), "stats": stats, "profile": prof, "view": dict(view or {})})
+    levels, cortada = escala_do_mapa(exam, vo)
+    escala = None if levels is None else {
+        "tipo": vo.scale, "passo": float(levels[1] - levels[0]), "de": float(levels[0]), "ate": float(levels[-1]),
+        "faixas": int(len(levels) - 1), "cortada": bool(cortada), "titulo": titulo_da_escala(vo.scale, vo.step, cortada)}
+    return _finite({"png": _png(fig, dpi=120), "stats": stats, "profile": prof, "view": dict(view or {}), "escala": escala})
 
 
 def completo_png(directory: str, exam_id: Optional[str], view: Optional[dict[str, Any]] = None, include_name: bool = True) -> dict[str, Any]:

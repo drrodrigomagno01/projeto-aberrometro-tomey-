@@ -85,7 +85,7 @@ from ..plots import (
     plot_zernike_bars,
 )
 from ..pupila import chord_mu_aparente, fmt_chord_mu
-from ..topo import ViewOptions, figure_tms_view, zone_axis_stats
+from ..topo import PASSOS_ESCALA_D, ViewOptions, figure_tms_view, fmt_passo, passo_valido, zone_axis_stats
 from ..reporting import export_all, report_lines
 from .canvas import MplCanvas
 from .compute import profile_settings_diff, run_analysis
@@ -675,13 +675,34 @@ class MainWindow(QMainWindow):
         grp.buttonClicked.connect(lambda *_: self._on_view_changed())
         return box, grp
 
+    def _escala_row(self) -> tuple[QGroupBox, QButtonGroup]:
+        """Escala de cores num só grupo exclusivo: a Standard do TMS (fixa: 40,5–53 D, passo 0,5 D) ou a ajustada ao
+        exame no passo do botão (0,125 a 1,00 D). Valor de cada botão: "tms" ou "auto:<passo>"."""
+        box = QGroupBox("Escala de cores (D)")
+        grid = QGridLayout(box); grid.setContentsMargins(6, 2, 6, 2); grid.setHorizontalSpacing(4); grid.setVerticalSpacing(0)
+        grp = QButtonGroup(box); grp.setExclusive(True)
+        rb = QRadioButton("Standard TMS (40,5–53, passo 0,5)"); rb.setProperty("value", "tms"); rb.setChecked(True)
+        rb.setToolTip("Escala fixa do aparelho: 26 faixas de 0,5 D de 40,5 a 53,0 D (as mesmas cores em todo exame).")
+        grp.addButton(rb, 0); grid.addWidget(rb, 0, 0, 1, len(PASSOS_ESCALA_D) + 1)
+        rot = QLabel("ajustada:")                    # curto: o grupo cabe ao lado do "Mapa" numa tela de 1366 px
+        rot.setToolTip("Escala ajustada ao exame no passo escolhido (D).")
+        grid.addWidget(rot, 1, 0)
+        for i, passo in enumerate(PASSOS_ESCALA_D):
+            rb = QRadioButton(fmt_passo(passo)); rb.setProperty("value", f"auto:{passo}")
+            rb.setToolTip(f"Escala ajustada ao exame em faixas de {fmt_passo(passo)} D, com as cores do TMS (8 a 26 faixas; "
+                          "acima de 26, a janela fica centrada no exame e os extremos saem nas cores das pontas).")
+            grp.addButton(rb, i + 1); grid.addWidget(rb, 1, i + 1)
+        grid.setColumnStretch(len(PASSOS_ESCALA_D) + 1, 1)
+        grp.buttonClicked.connect(lambda *_: self._on_view_changed())
+        return box, grp
+
     def _build_topo_tab(self) -> QWidget:
         w = QWidget(); lay = QVBoxLayout(w)
         row1 = QHBoxLayout(); row2 = QHBoxLayout()
         b, self.vg_kind = self._radio_row("Mapa", [("Axial", "axial"), ("Tangencial", "tangencial"), ("Refrativa", "refrativa"),
                                                    ("Elevação", "elevacao"), ("Frente de onda", "frente_onda"), ("Alta ordem", "alta_ordem")])
         row1.addWidget(b, 3)
-        b, self.vg_scale = self._radio_row("Escala", [("Standard TMS (40,5–53 D)", "tms"), ("Ajustada ao exame", "auto")])
+        b, self.vg_scale = self._escala_row()
         row1.addWidget(b, 2)
         b, self.vg_zone = self._radio_row("Zona (diâmetro)", [("tudo", None), ("3 mm", 3.0), ("5 mm", 5.0), ("7 mm", 7.0)])
         row2.addWidget(b, 2)
@@ -712,7 +733,9 @@ class MainWindow(QMainWindow):
         def val(grp: QButtonGroup):
             b = grp.checkedButton()
             return b.property("value") if b is not None else None
-        return ViewOptions(kind=kind or val(self.vg_kind) or "axial", scale=val(self.vg_scale) or "tms", zone_mm=val(self.vg_zone),
+        escala, _, passo = str(val(self.vg_scale) or "tms").partition(":")
+        return ViewOptions(kind=kind or val(self.vg_kind) or "axial", scale=escala if escala in ("tms", "auto") else "tms",
+                           step=passo_valido(passo or 0.5), zone_mm=val(self.vg_zone),
                            pupil_mm=val(self.vg_pupil), center=val(self.vg_center) or "vertice")
 
     def _on_view_changed(self) -> None:
